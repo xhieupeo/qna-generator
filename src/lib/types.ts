@@ -40,6 +40,7 @@ export interface ExtractedUnit {
   rawText: string;
   images: ExtractedImage[];
   communityAnswer?: string | null;
+  imageError?: string;
 }
 
 export interface QuizAttempt {

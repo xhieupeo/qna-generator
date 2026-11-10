@@ -5,6 +5,7 @@ export interface GenerateOpenRouterOptions {
   apiKey: string;
   modelName?: string;
   language?: string;
+  temperature?: number;
 }
 
 export async function generateQuestionFromUnitOpenRouter(
@@ -102,7 +103,9 @@ Instructions (Think-First Inverted Strategy):
           content: userContent,
         },
       ],
-      temperature: 0.1,
+      temperature: options.temperature ?? 0.15,
+      max_tokens: 2500,
+      frequency_penalty: 0.3,
     };
     if (withFormat) {
       payload.response_format = { type: "json_object" };

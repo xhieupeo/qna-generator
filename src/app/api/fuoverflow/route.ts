@@ -43,6 +43,7 @@ async function fetchWithCookies(
     const res = await fetch(currentUrl, {
       headers: currentHeaders,
       redirect: "manual",
+      signal: AbortSignal.timeout(6000),
     });
 
     // Capture and accumulate any Set-Cookie headers returned by server
@@ -68,7 +69,10 @@ async function fetchWithCookies(
     }
     return res;
   }
-  return await fetch(currentUrl, { headers: currentHeaders });
+  return await fetch(currentUrl, {
+    headers: currentHeaders,
+    signal: AbortSignal.timeout(6000),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -377,29 +381,32 @@ export async function POST(req: NextRequest) {
         ? candidateItems.slice(0, parsedLimit)
         : candidateItems;
 
-    // 4. Download images in controlled concurrency
+    // 4. Download images in controlled concurrency (preserving Q1..QN alignment)
     const units: ExtractedUnit[] = [];
+    const shouldScrapeMedia = origin.includes("fuoverflow") && itemsToProcess.length <= 30;
 
-    for (let i = 0; i < itemsToProcess.length; i += 8) {
-      const chunk = itemsToProcess.slice(i, i + 8);
+    for (let i = 0; i < itemsToProcess.length; i += 6) {
+      const chunk = itemsToProcess.slice(i, i + 6);
       const results = await Promise.allSettled(
         chunk.map(async (item, chunkIdx) => {
           const globalIdx = i + chunkIdx;
           const [imgData, communityAnswer] = await Promise.all([
             downloadImageBuffer(item),
-            item.mediaUrl ? scrapeMediaAnswer(item.mediaUrl) : Promise.resolve(null),
+            shouldScrapeMedia && item.mediaUrl
+              ? scrapeMediaAnswer(item.mediaUrl)
+              : Promise.resolve(null),
           ]);
 
-          if (imgData) {
-            return {
-              id: `unit_${globalIdx + 1}`,
-              questionNumber: globalIdx + 1,
-              rawText: `Question ${globalIdx + 1} (${item.rawFilename})`,
-              images: [imgData],
-              communityAnswer,
-            } as ExtractedUnit;
-          }
-          return null;
+          return {
+            id: `unit_${globalIdx + 1}`,
+            questionNumber: globalIdx + 1,
+            rawText: `Question ${globalIdx + 1} (${item.rawFilename})`,
+            images: imgData ? [imgData] : [],
+            communityAnswer,
+            imageError: imgData
+              ? undefined
+              : `Could not download image for Question ${globalIdx + 1} (${item.rawFilename}). Check your session cookie or retry.`,
+          } as ExtractedUnit;
         })
       );
 

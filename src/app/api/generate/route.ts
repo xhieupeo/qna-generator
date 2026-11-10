@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { parseUploadedExamFile } from "@/lib/file-ingest";
 import { generateQuestionFromUnit } from "@/lib/gemini";
 import { generateQuestionFromUnitOpenRouter } from "@/lib/openrouter";
+import { isFilenameStubWithoutImage } from "@/lib/ocr-guards";
 import { Question, ExtractedUnit } from "@/lib/types";
 
 export const maxDuration = 60; // Safe maximum for Vercel Serverless Functions
@@ -42,6 +43,15 @@ function isModelUnavailableError(err: any): boolean {
     msg.includes("no provider") ||
     msg.includes("not available") ||
     msg.includes("deprecated")
+  );
+}
+
+function isDegenerativeOutputError(err: any): boolean {
+  const msg = String(err?.message || "").toLowerCase();
+  return (
+    msg.includes("degenerative") ||
+    msg.includes("low-entropy") ||
+    msg.includes("malformed or truncated json")
   );
 }
 
@@ -91,6 +101,7 @@ async function generateWithCascade(
 
   let lastErr: any = null;
   const initialModel = cascade[0];
+  let temperatureOverride: number | undefined;
 
   for (let i = 0; i < cascade.length; i++) {
     const candidateModel = cascade[i];
@@ -99,6 +110,7 @@ async function generateWithCascade(
         apiKey: options.apiKey,
         modelName: candidateModel,
         language: options.language,
+        temperature: temperatureOverride,
       });
       return {
         question,
@@ -107,7 +119,11 @@ async function generateWithCascade(
       };
     } catch (err: any) {
       lastErr = err;
-      const canCascade = isRateLimitError(err) || isModelUnavailableError(err);
+      const isLoop = isDegenerativeOutputError(err);
+      if (isLoop) {
+        temperatureOverride = 0.35;
+      }
+      const canCascade = isRateLimitError(err) || isModelUnavailableError(err) || isLoop;
 
       if (canCascade && i < cascade.length - 1) {
         console.warn(
@@ -117,14 +133,15 @@ async function generateWithCascade(
         continue;
       }
 
-      // If no more models in cascade and it was a rate limit, do one brief final retry on primary
-      if (isRateLimitError(err) && i === cascade.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+      // If no more models in cascade and it was a rate limit or repetition loop, do one brief final retry
+      if ((isRateLimitError(err) || isLoop) && i === cascade.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, isLoop ? 300 : 2000));
         try {
           const retryQuestion = await solver(unit, {
             apiKey: options.apiKey,
             modelName: candidateModel,
             language: options.language,
+            temperature: isLoop ? 0.35 : temperatureOverride,
           });
           return {
             question: retryQuestion,
@@ -227,6 +244,13 @@ export async function POST(req: NextRequest) {
     for (let i = 0; i < units.length; i++) {
       const unit = units[i];
       try {
+        if (isFilenameStubWithoutImage(unit)) {
+          throw new Error(
+            unit.imageError ||
+              "Question image could not be downloaded or attached. Cannot transcribe without visual content."
+          );
+        }
+
         const result = await generateWithCascade(
           unit,
           {

@@ -243,13 +243,13 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                 />
               </div>
             ) : (
-              <div className="bg-white border border-slate-200 p-3 max-h-80 overflow-y-auto">
+              <div className="bg-white border border-slate-200 p-3 max-h-80 overflow-y-auto break-words">
                 <span className="text-[11px] font-mono uppercase text-slate-400 block mb-1 font-semibold">
                   Verbatim OCR & Math (LaTeX) Extraction:
                 </span>
                 <LatexRenderer
                   content={question.transcribedText || question.questionText}
-                  className="text-xs font-mono text-slate-900"
+                  className="text-xs font-mono text-slate-900 break-words"
                 />
               </div>
             )}
@@ -269,7 +269,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
               className="w-full border-2 border-slate-900 p-2.5 text-sm font-sans focus:outline-none"
             />
           ) : (
-            <div className="text-sm font-medium text-slate-900 leading-relaxed bg-slate-50 border border-slate-200 p-3">
+            <div className="text-sm font-medium text-slate-900 leading-relaxed bg-slate-50 border border-slate-200 p-3 max-h-72 overflow-y-auto break-words">
               <LatexRenderer content={question.questionText} />
             </div>
           )}
@@ -357,7 +357,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                   className="w-full border border-slate-300 p-2 text-xs font-mono focus:outline-none focus:border-slate-900"
                 />
               ) : (
-                <div className="text-xs text-slate-800 leading-relaxed space-y-1">
+                <div className="text-xs text-slate-800 leading-relaxed space-y-1 max-h-72 overflow-y-auto break-words">
                   <LatexRenderer content={question.explanation || "No explanation provided."} />
                 </div>
               )}

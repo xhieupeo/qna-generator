@@ -1,10 +1,14 @@
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { ExtractedUnit, Question } from "./types";
+import { assertNoDegenerativeRepetition } from "./ocr-guards";
+
+export { assertNoDegenerativeRepetition };
 
 export interface GenerateMcqOptions {
   apiKey: string;
   modelName?: string;
   language?: string;
+  temperature?: number;
 }
 
 /**
@@ -36,7 +40,7 @@ function cleanMimeType(mime: string): string {
  */
 export function extractJsonFromResponse(raw: string): any {
   if (!raw) {
-    throw new Error("Empty response received from Gemini.");
+    throw new Error("Empty response received from AI.");
   }
 
   let cleaned = raw.trim();
@@ -46,18 +50,35 @@ export function extractJsonFromResponse(raw: string): any {
     cleaned = cleaned.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
   }
 
+  assertNoDegenerativeRepetition(cleaned);
+
   // 1. Direct JSON parse attempt
   try {
-    return JSON.parse(cleaned);
-  } catch {
+    const parsed = JSON.parse(cleaned);
+    assertNoDegenerativeRepetition(parsed?.transcribedText || "");
+    assertNoDegenerativeRepetition(parsed?.questionText || "");
+    assertNoDegenerativeRepetition(parsed?.explanation || "");
+    return parsed;
+  } catch (directErr: any) {
+    if (directErr?.message?.includes("Degenerative") || directErr?.message?.includes("gibberish")) {
+      throw directErr;
+    }
+
     // 2. Substring extraction between first { and last }
     const firstBrace = cleaned.indexOf("{");
     const lastBrace = cleaned.lastIndexOf("}");
     if (firstBrace !== -1 && lastBrace > firstBrace) {
       const jsonSubstring = cleaned.slice(firstBrace, lastBrace + 1);
       try {
-        return JSON.parse(jsonSubstring);
-      } catch (innerErr) {
+        const parsed = JSON.parse(jsonSubstring);
+        assertNoDegenerativeRepetition(parsed?.transcribedText || "");
+        assertNoDegenerativeRepetition(parsed?.questionText || "");
+        assertNoDegenerativeRepetition(parsed?.explanation || "");
+        return parsed;
+      } catch (innerErr: any) {
+        if (innerErr?.message?.includes("Degenerative") || innerErr?.message?.includes("gibberish")) {
+          throw innerErr;
+        }
         console.warn("Failed to parse inner JSON substring:", innerErr);
       }
     }
@@ -68,24 +89,41 @@ export function extractJsonFromResponse(raw: string): any {
     const explanationMatch = cleaned.match(/"explanation"\s*:\s*"([\s\S]*?)(?<!\\)"/);
 
     if (transcribedMatch || questionMatch) {
+      const transcribedText = transcribedMatch
+        ? transcribedMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+        : "";
+      const questionText = questionMatch
+        ? questionMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+        : transcribedText.slice(0, 300);
+      const explanation = explanationMatch
+        ? explanationMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+        : "Extracted via OCR regex recovery.";
+
+      assertNoDegenerativeRepetition(transcribedText);
+      assertNoDegenerativeRepetition(questionText);
+      assertNoDegenerativeRepetition(explanation);
+
       return {
-        transcribedText: transcribedMatch
-          ? transcribedMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
-          : cleaned,
-        questionText: questionMatch
-          ? questionMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
-          : cleaned.slice(0, 300),
+        transcribedText: transcribedText || questionText,
+        questionText: questionText || transcribedText.slice(0, 300),
         options: ["Option A", "Option B", "Option C", "Option D"],
         correctOptionIndex: 0,
-        explanation: explanationMatch
-          ? explanationMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
-          : "Extracted via OCR regex recovery.",
+        explanation,
         topic: "OCR Extracted",
         difficulty: "Medium",
       };
     }
 
-    // 4. Ultimate graceful fallback: treat entire response text as verbatim transcription
+    // Reject broken/truncated JSON envelopes instead of dumping malformed JSON to UI
+    if (
+      cleaned.startsWith("{") ||
+      cleaned.includes('"transcribedText"') ||
+      cleaned.includes('"questionText"')
+    ) {
+      throw new Error("Malformed or truncated JSON response received from AI OCR.");
+    }
+
+    // 4. Plain-text response fallback (only for clean non-JSON responses)
     return {
       transcribedText: cleaned,
       questionText: cleaned.slice(0, 300),
@@ -119,10 +157,10 @@ export async function generateQuestionFromUnit(
   // 1. Attach Images if present with sanitized MIME and base64 data
   let primaryImage = null;
   if (unit.images && unit.images.length > 0) {
-    primaryImage = unit.images[0];
     for (const img of unit.images) {
       const sanitizedBase64 = cleanBase64Data(img.base64Data);
       if (sanitizedBase64) {
+        if (!primaryImage) primaryImage = img;
         promptParts.push({
           inlineData: {
             mimeType: cleanMimeType(img.mimeType),
@@ -175,13 +213,15 @@ Instructions (Think-First Inverted Strategy):
   promptParts.push(promptInstruction);
 
   let textResponse = "";
+  const temperature = options.temperature ?? 0.15;
 
   // Attempt 1: Using structured schema
   try {
     const model = genAI.getGenerativeModel({
       model: modelName,
       generationConfig: {
-        temperature: 0.1,
+        temperature,
+        maxOutputTokens: 2500,
         responseMimeType: "application/json",
         responseSchema: {
           type: SchemaType.OBJECT,
@@ -225,6 +265,17 @@ Instructions (Think-First Inverted Strategy):
     const result = await model.generateContent(promptParts);
     textResponse = result.response.text();
   } catch (schemaErr: any) {
+    const msg = String(schemaErr?.message || "").toLowerCase();
+    const isSchemaRejection =
+      msg.includes("schema") ||
+      msg.includes("responsemimetype") ||
+      msg.includes("json mode") ||
+      msg.includes("structured");
+
+    if (!isSchemaRejection) {
+      throw schemaErr;
+    }
+
     console.warn(
       `[Gemini Schema Warning] Model ${modelName} rejected responseSchema, retrying with raw generation:`,
       schemaErr?.message
@@ -233,7 +284,8 @@ Instructions (Think-First Inverted Strategy):
     const plainModel = genAI.getGenerativeModel({
       model: modelName,
       generationConfig: {
-        temperature: 0.1,
+        temperature,
+        maxOutputTokens: 2500,
       },
     });
 
