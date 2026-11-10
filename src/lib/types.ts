@@ -31,6 +31,7 @@ export interface ExtractedImage {
   mimeType: string;
   base64Data: string;
   src?: string;
+  fallbackSrc?: string;
 }
 
 export interface ExtractedUnit {

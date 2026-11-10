@@ -63,40 +63,53 @@ export async function parseUploadedExamFile(
 
 /**
  * Fetches remote http(s) image references found inside parsed HTML units and converts
- * valid images to base64. Fails gracefully on unreachable or non-image URLs.
+ * valid images to base64. Tries fallbackSrc if primary src fails (e.g. 403 on login-gated attachments).
  */
-async function hydrateRemoteImages(units: ExtractedUnit[]): Promise<void> {
+export async function hydrateRemoteImages(
+  units: ExtractedUnit[],
+  extraHeaders: Record<string, string> = {}
+): Promise<void> {
   const remoteImages = units
     .flatMap((u) => u.images)
     .filter((img) => !img.base64Data && img.src && /^https?:\/\//i.test(img.src));
 
   if (remoteImages.length === 0) return;
 
-  // Cap concurrent downloads to avoid overwhelming the server or exceeding parse time
-  const CONCURRENCY = 6;
+  const CONCURRENCY = 8;
   for (let i = 0; i < remoteImages.length; i += CONCURRENCY) {
     const batch = remoteImages.slice(i, i + CONCURRENCY);
     await Promise.all(
       batch.map(async (img) => {
-        try {
-          const res = await fetch(img.src!, {
-            signal: AbortSignal.timeout(3500),
-            headers: {
-              "User-Agent": "Mozilla/5.0 (compatible; QnAGenerator/1.0)",
-            },
-          });
-          if (!res.ok) return;
-          const contentType = (res.headers.get("content-type") || "").toLowerCase();
-          if (!contentType.startsWith("image/") || contentType.includes("svg")) return;
+        const candidates = [img.src, img.fallbackSrc].filter(
+          (u): u is string => Boolean(u && /^https?:\/\//i.test(u))
+        );
+        for (const targetUrl of candidates) {
+          try {
+            const origin = new URL(targetUrl).origin;
+            const res = await fetch(targetUrl, {
+              signal: AbortSignal.timeout(4500),
+              headers: {
+                "User-Agent":
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                Referer: `${origin}/`,
+                ...extraHeaders,
+              },
+            });
+            if (!res.ok) continue;
+            const contentType = (res.headers.get("content-type") || "").toLowerCase();
+            if (!contentType.startsWith("image/") || contentType.includes("svg")) continue;
 
-          const buf = Buffer.from(await res.arrayBuffer());
-          // Skip tiny tracking pixels / UI icons (< 1.5 KB)
-          if (buf.byteLength < 1500) return;
+            const buf = Buffer.from(await res.arrayBuffer());
+            // Skip tiny tracking pixels / UI icons (< 1.5 KB)
+            if (buf.byteLength < 1500) continue;
 
-          img.mimeType = contentType.split(";")[0].trim();
-          img.base64Data = buf.toString("base64");
-        } catch {
-          // Leave base64Data empty if remote fetch fails
+            img.mimeType = contentType.split(";")[0].trim();
+            img.base64Data = buf.toString("base64");
+            img.src = targetUrl;
+            break;
+          } catch {
+            // Try next candidate
+          }
         }
       })
     );

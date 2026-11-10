@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import * as cheerio from "cheerio";
 import { ExtractedUnit, ExtractedImage } from "@/lib/types";
 import { enhanceQuestionImage } from "@/lib/image-enhancer";
+import { parseHtmlContent } from "@/lib/html-parser";
+import { hydrateRemoteImages } from "@/lib/file-ingest";
 import sharp from "sharp";
 
-export const maxDuration = 180; // 3 minutes for large 50-question exams
+export const maxDuration = 60; // Safe maximum for Vercel Serverless Functions
 
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
@@ -72,21 +74,24 @@ async function fetchWithCookies(
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { url, cookie } = body;
+    const { url, cookie, limit } = body;
 
     if (!url || !url.startsWith("http")) {
       return NextResponse.json(
-        { error: "A valid FU Overflow thread URL is required (e.g., https://fuoverflow.com/threads/...)." },
+        { error: "A valid exam webpage or thread URL is required (e.g., https://fuexam.me/threads/... or https://fuoverflow.com/threads/...)." },
         { status: 400 }
       );
     }
+
+    const parsedUrl = new URL(url);
+    const origin = parsedUrl.origin;
 
     const headers: Record<string, string> = {
       "User-Agent": DEFAULT_USER_AGENT,
       Accept:
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
       "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-      Referer: "https://fuoverflow.com/",
+      Referer: `${origin}/`,
     };
 
     let cookieString = (cookie || process.env.FUO_COOKIE || "").trim();
@@ -250,9 +255,35 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // 3B. Fallback for generic open exam sites (non-XenForo pages)
     if (candidateItems.length === 0) {
+      const genericParsed = parseHtmlContent(html, { baseUrl: url });
+      if (genericParsed.units.length > 0) {
+        let genericUnits = genericParsed.units;
+        const parsedLimit = typeof limit === "number" ? limit : parseInt(String(limit || ""), 10);
+        if (!isNaN(parsedLimit) && parsedLimit > 0) {
+          genericUnits = genericUnits.slice(0, parsedLimit);
+        }
+        await hydrateRemoteImages(genericUnits, headers);
+        const validUnits = genericUnits.filter(
+          (u) => u.images.length > 0 || u.rawText.trim().length > 15
+        );
+        if (validUnits.length > 0) {
+          return NextResponse.json({
+            success: true,
+            title: genericParsed.title || title,
+            subjectCode,
+            isLoggedIn,
+            warning: authWarning,
+            totalFound: validUnits.length,
+            totalExtracted: validUnits.length,
+            units: validUnits,
+          });
+        }
+      }
+
       return NextResponse.json(
-        { error: "No question images or attachments found on this FU Overflow thread." },
+        { error: "No question images, attachments, or readable exam blocks were found on this URL." },
         { status: 404 }
       );
     }
@@ -339,11 +370,18 @@ export async function POST(req: NextRequest) {
       return null;
     }
 
+    // Apply requested question limit before downloading images
+    const parsedLimit = typeof limit === "number" ? limit : parseInt(String(limit || ""), 10);
+    const itemsToProcess =
+      !isNaN(parsedLimit) && parsedLimit > 0
+        ? candidateItems.slice(0, parsedLimit)
+        : candidateItems;
+
     // 4. Download images in controlled concurrency
     const units: ExtractedUnit[] = [];
 
-    for (let i = 0; i < candidateItems.length; i += 4) {
-      const chunk = candidateItems.slice(i, i + 4);
+    for (let i = 0; i < itemsToProcess.length; i += 8) {
+      const chunk = itemsToProcess.slice(i, i + 8);
       const results = await Promise.allSettled(
         chunk.map(async (item, chunkIdx) => {
           const globalIdx = i + chunkIdx;

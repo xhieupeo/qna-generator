@@ -488,13 +488,14 @@ export default function HomePage() {
     setSaveSuccessMsg(null);
 
     try {
-      // 1. Fetch images and metadata from FU Overflow
+      // 1. Fetch images and metadata from exam URL
       const fuoRes = await fetch("/api/fuoverflow", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url: fuoUrl.trim(),
           cookie: fuoCookie.trim() || undefined,
+          limit: questionLimit,
         }),
       });
 
@@ -982,7 +983,7 @@ export default function HomePage() {
             }`}
           >
             <Globe className="w-4 h-4 text-blue-600" />
-            <span>DIRECT FU OVERFLOW URL (NO SCREENSHOTS)</span>
+            <span>DIRECT EXAM URL (FUOVERFLOW / FUEXAM / WEB)</span>
           </button>
 
           <button
@@ -1008,23 +1009,23 @@ export default function HomePage() {
                   Zero-Screenshot Retrieval Engine
                 </span>
                 <h2 className="text-xl font-bold text-slate-900 mt-0.5">
-                  Paste FU Overflow Thread URL
+                  Paste Exam Thread or Webpage URL
                 </h2>
                 <p className="text-xs text-slate-600 mt-1 max-w-2xl">
-                  Automatically extracts all question images directly from the thread using cookie-preserved redirects. Gemini solves the questions and transcribes formulas into LaTeX.
+                  Automatically detects exam attachments and question blocks from FU Overflow, FuExam.me, or open exam pages. AI solves questions and transcribes formulas into LaTeX.
                 </p>
               </div>
 
               <div className="space-y-3 pt-2">
                 <div>
                   <label className="block text-xs font-mono uppercase text-slate-700 font-bold mb-1">
-                    FU Overflow Thread URL:
+                    Exam Thread / Webpage URL:
                   </label>
                   <input
                     type="url"
                     value={fuoUrl}
                     onChange={(e) => setFuoUrl(e.target.value)}
-                    placeholder="https://fuoverflow.com/threads/mad101-sp26-re.6332/"
+                    placeholder="https://fuexam.me/threads/dbi202-sp26-b5-fe.348/ or https://fuoverflow.com/threads/..."
                     className="w-full border-2 border-slate-900 px-3 py-2 text-xs font-mono bg-white focus:outline-none"
                   />
                 </div>
