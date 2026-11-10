@@ -203,7 +203,7 @@ export default function HomePage() {
         body: JSON.stringify({ apiKey }),
       });
 
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to verify API key with Google.");
       }
@@ -259,7 +259,7 @@ export default function HomePage() {
         body: JSON.stringify({ apiKey: openRouterKey }),
       });
 
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to verify OpenRouter key.");
       }
@@ -345,7 +345,7 @@ export default function HomePage() {
         body: formData,
       });
 
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to generate questions");
       }
@@ -391,7 +391,7 @@ export default function HomePage() {
         }),
       });
 
-      const fuoData = await fuoRes.json();
+      const fuoData = await safeJson(fuoRes);
       if (!fuoRes.ok) {
         throw new Error(fuoData.error || "Failed to retrieve images from FU Overflow");
       }
@@ -431,7 +431,7 @@ export default function HomePage() {
         }),
       });
 
-      const genData = await genRes.json();
+      const genData = await safeJson(genRes);
       if (!genRes.ok) {
         throw new Error(
           genData.error ||
@@ -501,7 +501,7 @@ export default function HomePage() {
       }),
     });
 
-    const data = await res.json();
+    const data = await safeJson(res);
     if (!res.ok) {
       throw new Error(data.error || "Failed to re-transcribe question.");
     }
@@ -554,7 +554,7 @@ export default function HomePage() {
         }),
       });
 
-      const data = await res.json();
+      const data = await safeJson(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to save quiz to Supabase");
       }
