@@ -1,45 +1,146 @@
 import { NextRequest, NextResponse } from "next/server";
-import JSZip from "jszip";
-import { parseHtmlContent } from "@/lib/html-parser";
+import { parseUploadedExamFile } from "@/lib/file-ingest";
 import { generateQuestionFromUnit } from "@/lib/gemini";
 import { generateQuestionFromUnitOpenRouter } from "@/lib/openrouter";
 import { Question, ExtractedUnit } from "@/lib/types";
 
-export const maxDuration = 300; // Allow up to 5 mins for 50-question multimodal processing
+export const maxDuration = 60; // Safe maximum for Vercel Serverless Functions
 
-async function generateWithRetry(
+const GEMINI_CASCADE = [
+  "gemini-3.8-flash",
+  "gemini-3.1-flash",
+  "gemini-3.0-flash",
+  "gemini-3.5-flash-lite",
+];
+
+const OPENROUTER_CASCADE = [
+  "openrouter/free",
+  "nvidia/nemotron-3.5-super-vl:free",
+  "meta-llama/llama-3.2-11b-vision-instruct:free",
+];
+
+function isRateLimitError(err: any): boolean {
+  const msg = String(err?.message || "").toLowerCase();
+  return (
+    err?.status === 429 ||
+    msg.includes("429") ||
+    msg.includes("quota") ||
+    msg.includes("resource_exhausted") ||
+    msg.includes("rate limit") ||
+    msg.includes("too many requests") ||
+    msg.includes("exhausted")
+  );
+}
+
+function isModelUnavailableError(err: any): boolean {
+  const msg = String(err?.message || "").toLowerCase();
+  return (
+    err?.status === 404 ||
+    msg.includes("404") ||
+    msg.includes("not found") ||
+    msg.includes("not supported") ||
+    msg.includes("no provider") ||
+    msg.includes("not available") ||
+    msg.includes("deprecated")
+  );
+}
+
+function buildModelCascade(
+  primaryModel: string,
+  provider: "gemini" | "openrouter",
+  extraFallbacks: string[] = []
+): string[] {
+  const defaults = provider === "openrouter" ? OPENROUTER_CASCADE : GEMINI_CASCADE;
+  const normalizedPrimary =
+    provider === "gemini" && /^gemini-(1\.0|1\.5|2\.0|2\.5)-/i.test(primaryModel)
+      ? "gemini-3.8-flash"
+      : primaryModel;
+
+  const seen = new Set<string>();
+  const cascade: string[] = [];
+  for (const m of [normalizedPrimary, ...extraFallbacks, ...defaults]) {
+    const trimmed = (m || "").trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    // Skip deprecated Gemini models if passed via detected/cached list
+    if (provider === "gemini" && /^gemini-(1\.0|1\.5|2\.0|2\.5)-/i.test(trimmed)) continue;
+    seen.add(trimmed);
+    cascade.push(trimmed);
+  }
+  return cascade;
+}
+
+/**
+ * Generates a single MCQ with automatic model cascade when rate-limited (429) or
+ * when a model is unavailable (404).
+ */
+async function generateWithCascade(
   unit: ExtractedUnit,
-  options: any,
-  provider: "gemini" | "openrouter" = "gemini",
-  maxRetries = 2
-): Promise<Question> {
+  options: { apiKey: string; modelName: string; language: string; fallbackModels?: string[] },
+  provider: "gemini" | "openrouter" = "gemini"
+): Promise<{ question: Question; usedModel: string; switchedFromModel?: string }> {
   const isOR =
     provider === "openrouter" || (options.apiKey && options.apiKey.startsWith("sk-or-"));
+  const resolvedProvider: "gemini" | "openrouter" = isOR ? "openrouter" : "gemini";
   const solver = isOR ? generateQuestionFromUnitOpenRouter : generateQuestionFromUnit;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await solver(unit, options);
-    } catch (err: any) {
-      const isRateLimit =
-        err?.status === 429 ||
-        err?.message?.includes("429") ||
-        err?.message?.includes("quota") ||
-        err?.message?.includes("RESOURCE_EXHAUSTED") ||
-        err?.message?.includes("exhausted");
+  const cascade = buildModelCascade(
+    options.modelName,
+    resolvedProvider,
+    options.fallbackModels || []
+  );
 
-      if (isRateLimit && attempt < maxRetries) {
-        const waitTime = (attempt + 1) * 4000;
+  let lastErr: any = null;
+  const initialModel = cascade[0];
+
+  for (let i = 0; i < cascade.length; i++) {
+    const candidateModel = cascade[i];
+    try {
+      const question = await solver(unit, {
+        apiKey: options.apiKey,
+        modelName: candidateModel,
+        language: options.language,
+      });
+      return {
+        question,
+        usedModel: candidateModel,
+        switchedFromModel: candidateModel !== initialModel ? initialModel : undefined,
+      };
+    } catch (err: any) {
+      lastErr = err;
+      const canCascade = isRateLimitError(err) || isModelUnavailableError(err);
+
+      if (canCascade && i < cascade.length - 1) {
         console.warn(
-          `[Rate Limit 429] Waiting ${waitTime / 1000}s before retrying unit ${unit.questionNumber}...`
+          `[Auto-Cascade] Model '${candidateModel}' failed (${err?.message}). Switching to '${cascade[i + 1]}'...`
         );
-        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        await new Promise((resolve) => setTimeout(resolve, 400));
         continue;
       }
+
+      // If no more models in cascade and it was a rate limit, do one brief final retry on primary
+      if (isRateLimitError(err) && i === cascade.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          const retryQuestion = await solver(unit, {
+            apiKey: options.apiKey,
+            modelName: candidateModel,
+            language: options.language,
+          });
+          return {
+            question: retryQuestion,
+            usedModel: candidateModel,
+            switchedFromModel: candidateModel !== initialModel ? initialModel : undefined,
+          };
+        } catch (retryErr: any) {
+          throw retryErr;
+        }
+      }
+
       throw err;
     }
   }
-  throw new Error("Exhausted retries");
+
+  throw lastErr || new Error("All models in cascade failed.");
 }
 
 export async function POST(req: NextRequest) {
@@ -48,10 +149,11 @@ export async function POST(req: NextRequest) {
 
     let title = "Generated Quiz";
     let units: ExtractedUnit[] = [];
-    let apiKey = process.env.GEMINI_API_KEY || "";
+    let apiKey = "";
     let modelName = "";
     let language = "English";
     let provider: "gemini" | "openrouter" = "gemini";
+    let fallbackModels: string[] = [];
     let isSingleUnit = false;
 
     if (contentType.includes("application/json")) {
@@ -62,84 +164,51 @@ export async function POST(req: NextRequest) {
       } else {
         units = body.units || [];
       }
-      title = body.title || "FU Overflow Quiz";
-      apiKey = body.apiKey || apiKey;
-      language = body.language || language;
+      title = body.title || "Generated Quiz";
       provider =
         body.provider ||
-        (apiKey.trim().startsWith("sk-or-") ? "openrouter" : "gemini");
+        ((body.apiKey || "").trim().startsWith("sk-or-") ? "openrouter" : "gemini");
+      apiKey =
+        body.apiKey ||
+        (provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GEMINI_API_KEY) ||
+        "";
+      language = body.language || language;
       modelName =
         body.modelName ||
-        (provider === "openrouter" ? "openrouter/free" : "gemini-2.0-flash");
+        (provider === "openrouter" ? "openrouter/free" : "gemini-3.8-flash");
+      fallbackModels = Array.isArray(body.fallbackModels) ? body.fallbackModels : [];
     } else {
       const formData = await req.formData();
       const file = formData.get("file") as File | null;
-      apiKey = (formData.get("apiKey") as string) || apiKey;
-      language = (formData.get("language") as string) || language;
+      const formKey = (formData.get("apiKey") as string) || "";
       provider =
-        ((formData.get("provider") as string) as any) ||
-        (apiKey.trim().startsWith("sk-or-") ? "openrouter" : "gemini");
+        ((formData.get("provider") as string) as "gemini" | "openrouter") ||
+        (formKey.trim().startsWith("sk-or-") ? "openrouter" : "gemini");
+      apiKey =
+        formKey ||
+        (provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GEMINI_API_KEY) ||
+        "";
+      language = (formData.get("language") as string) || language;
       modelName =
         (formData.get("modelName") as string) ||
-        (provider === "openrouter" ? "openrouter/free" : "gemini-2.0-flash");
+        (provider === "openrouter" ? "openrouter/free" : "gemini-3.8-flash");
 
       if (!file) {
         return NextResponse.json({ error: "No file provided" }, { status: 400 });
       }
 
-      let htmlContent = "";
-      const assetFiles = new Map<string, { mimeType: string; base64Data: string }>();
-      const fileName = file.name.toLowerCase();
-
-      if (fileName.endsWith(".zip")) {
-        const arrayBuffer = await file.arrayBuffer();
-        const zip = await JSZip.loadAsync(arrayBuffer);
-
-        let htmlFileEntry: JSZip.JSZipObject | null = null;
-        for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-          if (!zipEntry.dir && (relativePath.endsWith(".html") || relativePath.endsWith(".htm"))) {
-            htmlFileEntry = zipEntry;
-            break;
-          }
-        }
-
-        if (!htmlFileEntry) {
-          return NextResponse.json(
-            { error: "No .html or .htm file found inside the uploaded ZIP archive." },
-            { status: 400 }
-          );
-        }
-
-        htmlContent = await htmlFileEntry.async("text");
-
-        for (const [relativePath, zipEntry] of Object.entries(zip.files)) {
-          if (!zipEntry.dir) {
-            const lower = relativePath.toLowerCase();
-            let mimeType = "";
-            if (lower.endsWith(".png")) mimeType = "image/png";
-            else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) mimeType = "image/jpeg";
-            else if (lower.endsWith(".webp")) mimeType = "image/webp";
-            else if (lower.endsWith(".gif")) mimeType = "image/gif";
-            else if (lower.endsWith(".svg")) mimeType = "image/svg+xml";
-
-            if (mimeType) {
-              const base64Data = await zipEntry.async("base64");
-              assetFiles.set(relativePath, { mimeType, base64Data });
-            }
-          }
-        }
-      } else {
-        htmlContent = await file.text();
-      }
-
-      const parsed = parseHtmlContent(htmlContent, { assetFiles });
+      const parsed = await parseUploadedExamFile(file, { resolveRemoteImages: true });
       title = parsed.title;
       units = parsed.units;
     }
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "Gemini API key is required. Please enter it in the settings bar or set GEMINI_API_KEY." },
+        {
+          error: `${
+            provider === "openrouter" ? "OpenRouter" : "Gemini"
+          } API key is required. Please enter it in the settings bar.`,
+        },
         { status: 400 }
       );
     }
@@ -151,23 +220,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Process units through Gemini with rate-limit pacing & retry
     const questions: Question[] = [];
+    let currentModel = modelName;
+    let lastSwitchedFrom: string | undefined;
 
     for (let i = 0; i < units.length; i++) {
       const unit = units[i];
       try {
-        const question = await generateWithRetry(
+        const result = await generateWithCascade(
           unit,
           {
             apiKey,
-            modelName,
+            modelName: currentModel,
             language,
+            fallbackModels,
           },
           provider
         );
-        question.questionNumber = i + 1;
-        questions.push(question);
+        if (result.switchedFromModel) {
+          lastSwitchedFrom = result.switchedFromModel;
+        }
+        currentModel = result.usedModel;
+        result.question.questionNumber = unit.questionNumber || i + 1;
+        questions.push(result.question);
       } catch (genErr: any) {
         console.error(`Error generating MCQ for unit ${i + 1}:`, genErr);
         if (isSingleUnit) {
@@ -183,7 +258,7 @@ export async function POST(req: NextRequest) {
             ? "OpenRouter"
             : "Gemini";
         questions.push({
-          questionNumber: i + 1,
+          questionNumber: unit.questionNumber || i + 1,
           transcribedText:
             unit.rawText ||
             "Transcription unavailable due to API rate limit or error. Click [ RETRY OCR / SOLVE ] to process this question individually.",
@@ -198,9 +273,8 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      // Small 1.2s delay between questions if processing more than 5 questions
       if (units.length > 5 && i < units.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+        await new Promise((resolve) => setTimeout(resolve, 600));
       }
     }
 
@@ -209,6 +283,8 @@ export async function POST(req: NextRequest) {
       totalQuestions: questions.length,
       question: questions[0] || null,
       questions,
+      usedModel: currentModel,
+      switchedFromModel: lastSwitchedFrom,
     });
   } catch (error: any) {
     console.error("Generate API error:", error);

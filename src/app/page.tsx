@@ -24,15 +24,40 @@ import {
   ChevronUp,
 } from "lucide-react";
 
+/** Safely parse a fetch Response as JSON, returning a readable error object for plain-text/HTML errors (e.g. Vercel timeouts). */
+async function safeJson(res: Response): Promise<any> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const snippet = text.slice(0, 200).trim();
+    if (
+      res.status === 504 ||
+      snippet.toLowerCase().includes("timeout") ||
+      snippet.toLowerCase().includes("task timed out")
+    ) {
+      return {
+        error: "Server timed out while processing. Please retry or reduce question count.",
+      };
+    }
+    return {
+      error: snippet || `Server returned HTTP ${res.status} with a non-JSON response.`,
+    };
+  }
+}
+
+const GEMINI_CASCADE = [
+  "gemini-3.8-flash",
+  "gemini-3.1-flash",
+  "gemini-3.0-flash",
+  "gemini-3.5-flash-lite",
+];
+
 const PRESET_MODELS = [
   { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Active Subscription / Recommended)" },
   { id: "gemini-3.1-flash", label: "Gemini 3.1 Flash" },
   { id: "gemini-3.0-flash", label: "Gemini 3.0 Flash" },
   { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash Lite" },
-  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-  { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
-  { id: "gemini-1.5-flash", label: "Gemini 1.5 Flash" },
-  { id: "gemini-1.5-pro", label: "Gemini 1.5 Pro" },
 ];
 
 const OPENROUTER_MODELS = [
@@ -95,6 +120,7 @@ export default function HomePage() {
   // Processing state
   const [isGenerating, setIsGenerating] = useState(false);
   const [progressMsg, setProgressMsg] = useState("");
+  const [progressPct, setProgressPct] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [warningMsg, setWarningMsg] = useState<string | null>(null);
 
@@ -212,7 +238,7 @@ export default function HomePage() {
         setDetectedModels(data.models);
         const ids = data.models.map((m: any) => m.id);
         if (!ids.includes(modelName)) {
-          const preferred = ids.find((id: string) => id === "gemini-1.5-flash") || ids[0];
+          const preferred = ids.find((id: string) => id === "gemini-3.8-flash") || ids[0];
           setModelName(preferred);
           localStorage.setItem("gemini_model_name", preferred);
         }
@@ -302,7 +328,88 @@ export default function HomePage() {
     }
   };
 
-  // Generate from uploaded HTML or ZIP file
+  // Progressive unit-by-unit solver to prevent Vercel serverless timeouts & support live 429 cascade
+  const solveUnitsProgressively = async (units: ExtractedUnit[], resolvedTitle: string) => {
+    setQuizTitle(resolvedTitle);
+    setQuestions([]);
+    setProgressPct(5);
+
+    const detectedIds = detectedModels.map((m) => m.id);
+    const fallbackModels = aiProvider === "gemini" ? [...detectedIds, ...GEMINI_CASCADE] : [];
+    let currentModel = effectiveModelName;
+    const switchNotices: string[] = [];
+
+    for (let i = 0; i < units.length; i++) {
+      const unit = units[i];
+      const qNum = i + 1;
+      setProgressMsg(
+        `Solving question ${qNum} of ${units.length} with ${
+          aiProvider === "gemini" ? "Gemini" : "OpenRouter"
+        } (${currentModel})...`
+      );
+
+      let solvedQuestion: Question | null = null;
+      let unitErrorMsg = "";
+
+      try {
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: resolvedTitle,
+            unit,
+            apiKey: effectiveApiKey,
+            modelName: currentModel,
+            provider: aiProvider,
+            language,
+            fallbackModels,
+          }),
+        });
+
+        const data = await safeJson(res);
+        if (!res.ok) {
+          unitErrorMsg = data.error || `HTTP ${res.status}`;
+        } else {
+          if (data.usedModel && data.usedModel !== currentModel) {
+            const note = `Rate limit/unavailable on ${currentModel} -> auto-switched to ${data.usedModel}`;
+            if (!switchNotices.includes(note)) {
+              switchNotices.push(note);
+              setWarningMsg((prev) => (prev ? `${prev} | ${note}` : note));
+            }
+            currentModel = data.usedModel;
+          }
+          solvedQuestion = data.question || (data.questions && data.questions[0]) || null;
+        }
+      } catch (err: any) {
+        unitErrorMsg = err?.message || "Network error";
+      }
+
+      if (!solvedQuestion) {
+        const engineLabel = aiProvider === "gemini" ? "Gemini" : "OpenRouter";
+        solvedQuestion = {
+          questionNumber: qNum,
+          transcribedText:
+            unit.rawText ||
+            "Transcription unavailable due to API rate limit or error. Click [ RETRY OCR / SOLVE ] to process this question individually.",
+          questionText: unit.rawText || "Question extracted from image",
+          imageBase64: unit.images[0]?.base64Data || null,
+          imageMimeType: unit.images[0]?.mimeType || null,
+          options: ["Option A", "Option B", "Option C", "Option D"],
+          correctOptionIndex: 0,
+          explanation: `Failed to auto-generate answer via ${engineLabel}: ${unitErrorMsg || "Unknown error"}. You can manually edit this question or click [ RETRY OCR / SOLVE ].`,
+          difficulty: "Medium",
+          topic: "Review Needed",
+        };
+      } else {
+        solvedQuestion.questionNumber = qNum;
+      }
+
+      setQuestions((prev) => [...prev, solvedQuestion!]);
+      setProgressPct(Math.round(((i + 1) / units.length) * 100));
+    }
+  };
+
+  // Generate from uploaded HTML or ZIP file (pre-parsed first, then solved progressively)
   const handleGenerateFromFile = async () => {
     if (!file) {
       setErrorMsg("Please select an HTML or ZIP file first.");
@@ -317,11 +424,8 @@ export default function HomePage() {
     }
 
     setIsGenerating(true);
-    setProgressMsg(
-      `Ingesting HTML and extracting images (Processing with ${
-        aiProvider === "gemini" ? "Gemini" : "OpenRouter"
-      } ${effectiveModelName})...`
-    );
+    setProgressPct(2);
+    setProgressMsg(`Parsing ${file.name} & extracting embedded questions/images...`);
     setErrorMsg(null);
     setWarningMsg(null);
     setSaveSuccessMsg(null);
@@ -329,30 +433,32 @@ export default function HomePage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      formData.append("apiKey", effectiveApiKey);
-      formData.append("modelName", effectiveModelName);
-      formData.append("provider", aiProvider);
-      formData.append("language", language);
 
-      setProgressMsg(
-        `Sending multimodal data to ${
-          aiProvider === "gemini" ? "Gemini" : "OpenRouter"
-        } AI engine (extracting, solving & generating choices)...`
-      );
-
-      const res = await fetch("/api/generate", {
+      const parseRes = await fetch("/api/parse", {
         method: "POST",
         body: formData,
       });
 
-      const data = await safeJson(res);
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to generate questions");
+      const parseData = await safeJson(parseRes);
+      if (!parseRes.ok) {
+        throw new Error(parseData.error || "Failed to parse uploaded file");
       }
 
-      setQuizTitle(data.title || file.name.replace(/\.[^/.]+$/, ""));
-      setQuestions(data.questions || []);
+      let units: ExtractedUnit[] = parseData.units || [];
+      const fallbackTitle = file.name.replace(/\.[^/.]+$/, "");
+      const title =
+        parseData.title && parseData.title !== "Generated Quiz" ? parseData.title : fallbackTitle;
+
+      if (questionLimit !== "all") {
+        const num = parseInt(questionLimit, 10);
+        if (!isNaN(num) && num > 0) {
+          units = units.slice(0, num);
+        }
+      }
+
+      await solveUnitsProgressively(units, title);
       setProgressMsg("");
+      setProgressPct(0);
     } catch (err: any) {
       setErrorMsg(err.message || "An unexpected error occurred during generation.");
     } finally {
@@ -375,6 +481,7 @@ export default function HomePage() {
     }
 
     setIsGenerating(true);
+    setProgressPct(2);
     setProgressMsg("Connecting to FU Overflow & downloading full-resolution question attachments...");
     setErrorMsg(null);
     setWarningMsg(null);
@@ -411,39 +518,10 @@ export default function HomePage() {
         }
       }
 
-      setProgressMsg(
-        `Retrieved ${units.length} images from FU Overflow. Solving with ${
-          aiProvider === "gemini" ? "Gemini" : "OpenRouter"
-        } AI...`
-      );
-
-      // 2. Feed extracted units into AI Engine
-      const genRes = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title,
-          units,
-          apiKey: effectiveApiKey,
-          modelName: effectiveModelName,
-          provider: aiProvider,
-          language,
-        }),
-      });
-
-      const genData = await safeJson(genRes);
-      if (!genRes.ok) {
-        throw new Error(
-          genData.error ||
-            `Failed to solve questions with ${
-              aiProvider === "gemini" ? "Gemini" : "OpenRouter"
-            }`
-        );
-      }
-
-      setQuizTitle(genData.title || title);
-      setQuestions(genData.questions || []);
+      // 2. Solve progressively unit-by-unit
+      await solveUnitsProgressively(units, title);
       setProgressMsg("");
+      setProgressPct(0);
     } catch (err: any) {
       setErrorMsg(err.message || "Failed to process FU Overflow exam.");
     } finally {
@@ -498,6 +576,7 @@ export default function HomePage() {
         modelName: effectiveModelName,
         provider: aiProvider,
         language,
+        fallbackModels: aiProvider === "gemini" ? [...detectedModels.map((m) => m.id), ...GEMINI_CASCADE] : [],
       }),
     });
 
@@ -772,7 +851,7 @@ export default function HomePage() {
                         type="text"
                         value={customModel}
                         onChange={(e) => handleCustomModelChange(e.target.value)}
-                        placeholder="e.g. gemini-1.5-flash"
+                        placeholder="e.g. gemini-3.8-flash"
                         className="w-full border-2 border-slate-900 px-3 py-1.5 text-xs font-mono bg-white focus:outline-none"
                       />
                       <span className="text-[10px] text-slate-500 font-mono mt-0.5 block">
@@ -1126,10 +1205,13 @@ export default function HomePage() {
             <div className="mt-6 p-4 bg-slate-100 border border-slate-900 space-y-2">
               <div className="flex items-center justify-between text-xs font-mono font-bold">
                 <span>PIPELINE RUNNING</span>
-                <span className="animate-pulse">WORKING...</span>
+                <span>{progressPct > 0 ? `${progressPct}% COMPLETE` : "WORKING..."}</span>
               </div>
               <div className="w-full h-2 bg-slate-200 border border-slate-400">
-                <div className="h-full bg-slate-900 w-3/4 animate-pulse"></div>
+                <div
+                  className="h-full bg-slate-900 transition-all duration-300"
+                  style={{ width: `${Math.max(progressPct, 10)}%` }}
+                ></div>
               </div>
               <p className="text-xs font-mono text-slate-700">{progressMsg}</p>
             </div>

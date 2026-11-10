@@ -108,7 +108,11 @@ export async function generateQuestionFromUnit(
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelName = options.modelName || "gemini-3.8-flash";
+  let modelName = options.modelName || "gemini-3.8-flash";
+  if (/^gemini-(1\.0|1\.5|2\.0|2\.5)-/i.test(modelName)) {
+    console.warn(`[Gemini Migration] Replacing deprecated model '${modelName}' with 'gemini-3.8-flash'`);
+    modelName = "gemini-3.8-flash";
+  }
 
   const promptParts: any[] = [];
 

@@ -25,7 +25,7 @@ export function parseHtmlContent(
 
   // Helper to extract image data from an <img> element
   function extractImgData(img: cheerio.Cheerio<any>, index: number): ExtractedImage | null {
-    const src = img.attr("src") || "";
+    const src = (img.attr("src") || img.attr("data-src") || "").trim();
     if (!src) return null;
 
     // Check if it's base64 inline
@@ -57,13 +57,23 @@ export function parseHtmlContent(
       }
     }
 
+    // Preserve remote http(s) URL so server-side /api/parse can download it
+    if (src.startsWith("http://") || src.startsWith("https://")) {
+      return {
+        id: `img_${index}`,
+        mimeType: "image/jpeg",
+        base64Data: "",
+        src,
+      };
+    }
+
     return null;
   }
 
   const units: ExtractedUnit[] = [];
   let imageCounter = 0;
 
-  // 3. Try to find explicit question blocks
+  // 3. Try to find explicit question blocks (skip outer wrapper containers that hold nested matches)
   const questionSelectors = [
     ".question",
     ".que",
@@ -75,9 +85,12 @@ export function parseHtmlContent(
 
   let foundExplicitBlocks = false;
   for (const selector of questionSelectors) {
-    const blocks = $(selector);
-    if (blocks.length > 0) {
-      foundExplicitBlocks = true;
+    const matched = $(selector);
+    if (matched.length > 0) {
+      // Filter out wrapper elements that contain child elements matching the same selector
+      const leafBlocks = matched.filter((_, el) => $(el).find(selector).length === 0);
+      const blocks = leafBlocks.length > 0 ? leafBlocks : matched;
+
       blocks.each((i, el) => {
         const block = $(el);
         const images: ExtractedImage[] = [];
@@ -90,14 +103,18 @@ export function parseHtmlContent(
         const rawText = block.text().replace(/\s+/g, " ").trim();
         if (rawText.length > 5 || images.length > 0) {
           units.push({
-            id: `unit_${i + 1}`,
-            questionNumber: i + 1,
+            id: `unit_${units.length + 1}`,
+            questionNumber: units.length + 1,
             rawText,
             images,
           });
         }
       });
-      break;
+
+      if (units.length > 0) {
+        foundExplicitBlocks = true;
+        break;
+      }
     }
   }
 

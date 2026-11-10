@@ -33,8 +33,9 @@ export async function generateQuestionFromUnitOpenRouter(
   // 1. Attach Images if present (OpenRouter uses standard OpenAI image_url format)
   let primaryImage = null;
   if (unit.images && unit.images.length > 0) {
-    primaryImage = unit.images[0];
     for (const img of unit.images) {
+      if (!img.base64Data) continue;
+      if (!primaryImage) primaryImage = img;
       const mime = img.mimeType || "image/jpeg";
       const base64Url = img.base64Data.startsWith("data:")
         ? img.base64Data
