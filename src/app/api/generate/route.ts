@@ -232,9 +232,8 @@ export async function POST(req: NextRequest) {
     if (!apiKey) {
       return NextResponse.json(
         {
-          error: `${
-            provider === "openrouter" ? "OpenRouter" : "Gemini"
-          } API key is required. Please enter it in the settings bar.`,
+          error: `${provider === "openrouter" ? "OpenRouter" : "Gemini"
+            } API key is required. Please enter it in the settings bar.`,
         },
         { status: 400 }
       );
@@ -257,7 +256,7 @@ export async function POST(req: NextRequest) {
         if (isFilenameStubWithoutImage(unit)) {
           throw new Error(
             unit.imageError ||
-              "Question image could not be downloaded or attached. Cannot transcribe without visual content."
+            "Question image could not be downloaded or attached. Cannot transcribe without visual content."
           );
         }
 
