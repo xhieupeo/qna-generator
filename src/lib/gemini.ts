@@ -140,7 +140,12 @@ export async function generateQuestionFromUnit(
   unit: ExtractedUnit,
   options: GenerateMcqOptions
 ): Promise<Question> {
-  const apiKey = options.apiKey || process.env.GEMINI_API_KEY;
+  const allowEnvFallback = process.env.ALLOW_SERVER_KEY_FALLBACK === "true";
+  const apiKey = (
+    options.apiKey ||
+    (allowEnvFallback ? process.env.GEMINI_API_KEY : "") ||
+    ""
+  ).trim();
   if (!apiKey) {
     throw new Error("Missing Gemini API Key. Please provide it in settings or .env file.");
   }

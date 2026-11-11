@@ -107,6 +107,7 @@ export const LatexRenderer: React.FC<LatexRendererProps> = ({
             html = katex.renderToString(seg.raw.trim(), {
               displayMode: true,
               throwOnError: false,
+              trust: false,
             });
           } catch {
             return (
@@ -133,6 +134,7 @@ export const LatexRenderer: React.FC<LatexRendererProps> = ({
             html = katex.renderToString(seg.raw.trim(), {
               displayMode: false,
               throwOnError: false,
+              trust: false,
             });
           } catch {
             return (

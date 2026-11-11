@@ -2,6 +2,7 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { parseHtmlContent } from "./html-parser";
 import { enhanceQuestionImage } from "./image-enhancer";
+import { assertSafePublicUrl } from "./url-security";
 import { ExtractedUnit } from "./types";
 
 /**
@@ -113,18 +114,28 @@ async function fetchImageCandidate(
   targetUrl: string,
   extraHeaders: Record<string, string>
 ): Promise<{ buffer: Buffer; mimeType: string } | { status: number }> {
-  const origin = new URL(targetUrl).origin;
+  let origin = "";
+  try {
+    origin = assertSafePublicUrl(targetUrl).origin;
+  } catch {
+    return { status: 403 };
+  }
   const maxAttempts = 2;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
+      const safeHeaders = { ...extraHeaders };
+      // Only forward Cookie headers when fetching from the same origin as the Referer
+      if (safeHeaders["Referer"] && !safeHeaders["Referer"].startsWith(origin)) {
+        delete safeHeaders["Cookie"];
+      }
       const res = await fetch(targetUrl, {
         signal: AbortSignal.timeout(5500),
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
           Referer: `${origin}/`,
-          ...extraHeaders,
+          ...safeHeaders,
         },
       });
 

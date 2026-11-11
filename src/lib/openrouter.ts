@@ -12,7 +12,12 @@ export async function generateQuestionFromUnitOpenRouter(
   unit: ExtractedUnit,
   options: GenerateOpenRouterOptions
 ): Promise<Question> {
-  const apiKey = (options.apiKey || process.env.OPENROUTER_API_KEY || "").trim();
+  const allowEnvFallback = process.env.ALLOW_SERVER_KEY_FALLBACK === "true";
+  const apiKey = (
+    options.apiKey ||
+    (allowEnvFallback ? process.env.OPENROUTER_API_KEY : "") ||
+    ""
+  ).trim();
   if (!apiKey) {
     throw new Error("Missing OpenRouter API Key. Please provide it in settings or .env file.");
   }

@@ -185,9 +185,14 @@ export async function POST(req: NextRequest) {
       provider =
         body.provider ||
         ((body.apiKey || "").trim().startsWith("sk-or-") ? "openrouter" : "gemini");
+      const allowEnvFallback = process.env.ALLOW_SERVER_KEY_FALLBACK === "true";
       apiKey =
-        body.apiKey ||
-        (provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GEMINI_API_KEY) ||
+        (body.apiKey || "").trim() ||
+        (allowEnvFallback
+          ? provider === "openrouter"
+            ? process.env.OPENROUTER_API_KEY
+            : process.env.GEMINI_API_KEY
+          : "") ||
         "";
       language = body.language || language;
       modelName =
@@ -201,9 +206,14 @@ export async function POST(req: NextRequest) {
       provider =
         ((formData.get("provider") as string) as "gemini" | "openrouter") ||
         (formKey.trim().startsWith("sk-or-") ? "openrouter" : "gemini");
+      const allowEnvFallback = process.env.ALLOW_SERVER_KEY_FALLBACK === "true";
       apiKey =
-        formKey ||
-        (provider === "openrouter" ? process.env.OPENROUTER_API_KEY : process.env.GEMINI_API_KEY) ||
+        formKey.trim() ||
+        (allowEnvFallback
+          ? provider === "openrouter"
+            ? process.env.OPENROUTER_API_KEY
+            : process.env.GEMINI_API_KEY
+          : "") ||
         "";
       language = (formData.get("language") as string) || language;
       modelName =

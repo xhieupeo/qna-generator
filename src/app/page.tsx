@@ -22,6 +22,7 @@ import {
   HelpCircle,
   ChevronDown,
   ChevronUp,
+  Trash2,
 } from "lucide-react";
 
 /** Safely parse a fetch Response as JSON, returning a readable error object for plain-text/HTML errors (e.g. Vercel timeouts). */
@@ -133,15 +134,50 @@ export default function HomePage() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
-  // Load API Keys, FUO Cookie & Models from localStorage
+  // Credential persistence preference (false = sessionStorage only, cleared on tab close)
+  const [rememberCredentials, setRememberCredentials] = useState(false);
+
+  const persistSecret = (storageKey: string, value: string, persist = rememberCredentials) => {
+    const trimmed = value;
+    if (persist) {
+      if (trimmed) localStorage.setItem(storageKey, trimmed);
+      else localStorage.removeItem(storageKey);
+      sessionStorage.removeItem(storageKey);
+    } else {
+      if (trimmed) sessionStorage.setItem(storageKey, trimmed);
+      else sessionStorage.removeItem(storageKey);
+      localStorage.removeItem(storageKey);
+    }
+  };
+
+  // Load API Keys, FUO Cookie & Models from browser storage
   useEffect(() => {
     const savedProvider = localStorage.getItem("ai_provider") as "gemini" | "openrouter" | null;
     if (savedProvider) setAiProvider(savedProvider);
 
-    const savedKey = localStorage.getItem("gemini_api_key");
+    const persist = localStorage.getItem("remember_credentials") === "true";
+    setRememberCredentials(persist);
+
+    const readSecret = (key: string): string => {
+      if (persist) {
+        return localStorage.getItem(key) || "";
+      }
+      const sessionVal = sessionStorage.getItem(key);
+      if (sessionVal) return sessionVal;
+      // Migrate any legacy plaintext key out of localStorage into sessionStorage
+      const legacyLocalVal = localStorage.getItem(key);
+      if (legacyLocalVal) {
+        sessionStorage.setItem(key, legacyLocalVal);
+        localStorage.removeItem(key);
+        return legacyLocalVal;
+      }
+      return "";
+    };
+
+    const savedKey = readSecret("gemini_api_key");
     if (savedKey) setApiKey(savedKey);
 
-    const savedOrKey = localStorage.getItem("openrouter_api_key");
+    const savedOrKey = readSecret("openrouter_api_key");
     if (savedOrKey) setOpenRouterKey(savedOrKey);
 
     const savedOrModel = localStorage.getItem("openrouter_model_name");
@@ -161,7 +197,7 @@ export default function HomePage() {
       setOpenRouterModel("openrouter/free");
     }
 
-    const savedFuoCookie = localStorage.getItem("fuo_cookie");
+    const savedFuoCookie = readSecret("fuo_cookie");
     if (savedFuoCookie) setFuoCookie(savedFuoCookie);
 
     const savedModel = localStorage.getItem("gemini_model_name");
@@ -182,12 +218,12 @@ export default function HomePage() {
 
   const handleSaveApiKey = (key: string) => {
     setApiKey(key);
-    localStorage.setItem("gemini_api_key", key);
+    persistSecret("gemini_api_key", key);
   };
 
   const handleSaveOpenRouterKey = (key: string) => {
     setOpenRouterKey(key);
-    localStorage.setItem("openrouter_api_key", key);
+    persistSecret("openrouter_api_key", key);
   };
 
   const handleOpenRouterModelChange = (model: string) => {
@@ -197,7 +233,33 @@ export default function HomePage() {
 
   const handleSaveFuoCookie = (cookieVal: string) => {
     setFuoCookie(cookieVal);
-    localStorage.setItem("fuo_cookie", cookieVal);
+    persistSecret("fuo_cookie", cookieVal);
+  };
+
+  const handleToggleRememberCredentials = (nextPersist: boolean) => {
+    setRememberCredentials(nextPersist);
+    if (nextPersist) {
+      localStorage.setItem("remember_credentials", "true");
+    } else {
+      localStorage.removeItem("remember_credentials");
+    }
+    persistSecret("gemini_api_key", apiKey, nextPersist);
+    persistSecret("openrouter_api_key", openRouterKey, nextPersist);
+    persistSecret("fuo_cookie", fuoCookie, nextPersist);
+  };
+
+  const handleClearSavedCredentials = () => {
+    setApiKey("");
+    setOpenRouterKey("");
+    setFuoCookie("");
+    setRememberCredentials(false);
+    setKeyTestMessage(null);
+    setOpenRouterTestMessage(null);
+    ["gemini_api_key", "openrouter_api_key", "fuo_cookie", "remember_credentials"].forEach((k) => {
+      localStorage.removeItem(k);
+      sessionStorage.removeItem(k);
+    });
+    setWarningMsg("All API keys and session cookies have been cleared from this browser.");
   };
 
   const handleModelChange = (model: string) => {
@@ -293,7 +355,7 @@ export default function HomePage() {
       setOpenRouterTestMessage({
         type: "success",
         text: `OpenRouter Key Verified! ${
-          data.keyInfo?.label ? `(${data.keyInfo.label})` : ""
+          data.keyInfo?.isFreeTier ? "(Free Tier)" : "(Account Active)"
         } Free multimodal vision models are ready.`,
       });
     } catch (err: any) {
@@ -775,6 +837,7 @@ export default function HomePage() {
                   </div>
                   <input
                     type="password"
+                    autoComplete="off"
                     value={apiKey}
                     onChange={(e) => handleSaveApiKey(e.target.value)}
                     placeholder="AIzaSy..."
@@ -793,7 +856,9 @@ export default function HomePage() {
                     </button>
 
                     <span className="text-[11px] text-slate-500 font-mono">
-                      Stored securely in your browser's local storage.
+                      {rememberCredentials
+                        ? "Saved locally on this device only."
+                        : "Session-only (cleared when tab closes)."}
                     </span>
                   </div>
 
@@ -881,6 +946,7 @@ export default function HomePage() {
                   </div>
                   <input
                     type="password"
+                    autoComplete="off"
                     value={openRouterKey}
                     onChange={(e) => handleSaveOpenRouterKey(e.target.value)}
                     placeholder="sk-or-v1-..."
@@ -899,7 +965,9 @@ export default function HomePage() {
                     </button>
 
                     <span className="text-[11px] text-slate-500 font-mono">
-                      Stored securely in your browser's local storage.
+                      {rememberCredentials
+                        ? "Saved locally on this device only."
+                        : "Session-only (cleared when tab closes)."}
                     </span>
                   </div>
 
@@ -953,18 +1021,45 @@ export default function HomePage() {
               </div>
             )}
 
-            <div>
-              <label className="block text-xs font-mono uppercase text-slate-700 font-bold mb-1">
-                Output Language:
-              </label>
-              <input
-                type="text"
-                value={language}
-                onChange={(e) => setLanguage(e.target.value)}
-                placeholder="English, Vietnamese, French, etc."
-                className="w-full md:w-64 border-2 border-slate-900 px-3 py-1.5 text-xs font-mono bg-white focus:outline-none"
-              />
+            <div className="flex flex-wrap items-end justify-between gap-4 pt-2 border-t border-slate-200">
+              <div>
+                <label className="block text-xs font-mono uppercase text-slate-700 font-bold mb-1">
+                  Output Language:
+                </label>
+                <input
+                  type="text"
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  placeholder="English, Vietnamese, French, etc."
+                  className="w-full md:w-64 border-2 border-slate-900 px-3 py-1.5 text-xs font-mono bg-white focus:outline-none"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-xs font-mono text-slate-700 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={rememberCredentials}
+                    onChange={(e) => handleToggleRememberCredentials(e.target.checked)}
+                    className="w-4 h-4 accent-slate-900 cursor-pointer"
+                  />
+                  <span>Remember keys &amp; cookie on this device</span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={handleClearSavedCredentials}
+                  className="px-3 py-1.5 border border-red-600 bg-red-50 text-red-700 hover:bg-red-600 hover:text-white font-mono text-xs font-bold uppercase flex items-center gap-1.5 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>[ Clear Saved Keys &amp; Cookie ]</span>
+                </button>
+              </div>
             </div>
+
+            <p className="text-[11px] font-mono text-slate-500">
+              Privacy: Your API keys and cookies never leave your own browser except in direct requests you trigger, are never stored in Supabase, and are never visible to other visitors.
+            </p>
           </div>
         )}
       </div>
@@ -1047,6 +1142,7 @@ export default function HomePage() {
 
                   <input
                     type="password"
+                    autoComplete="off"
                     value={fuoCookie}
                     onChange={(e) => handleSaveFuoCookie(e.target.value)}
                     placeholder="xf_user=12345%2Cabcdef...; xf_session=xyz..."

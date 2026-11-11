@@ -4,6 +4,7 @@ import { ExtractedUnit, ExtractedImage } from "@/lib/types";
 import { enhanceQuestionImage } from "@/lib/image-enhancer";
 import { parseHtmlContent } from "@/lib/html-parser";
 import { hydrateRemoteImages } from "@/lib/file-ingest";
+import { assertSafePublicUrl } from "@/lib/url-security";
 import sharp from "sharp";
 
 export const maxDuration = 60; // Safe maximum for Vercel Serverless Functions
@@ -21,6 +22,7 @@ async function fetchWithCookies(
   maxRedirects = 5
 ): Promise<Response> {
   let currentUrl = url;
+  const initialOrigin = assertSafePublicUrl(url).origin;
   const currentHeaders = { ...initialHeaders };
 
   // Parse existing cookies into a map
@@ -33,11 +35,16 @@ async function fetchWithCookies(
   }
 
   for (let i = 0; i < maxRedirects; i++) {
-    // Reconstruct Cookie header with accumulated session cookies
-    if (cookieMap.size > 0) {
+    const parsedHop = assertSafePublicUrl(currentUrl);
+    const sameOrigin = parsedHop.origin === initialOrigin;
+
+    // Only attach cookies on same-origin requests; never leak session cookies to third-party redirects
+    if (sameOrigin && cookieMap.size > 0) {
       currentHeaders["Cookie"] = Array.from(cookieMap.entries())
         .map(([k, v]) => `${k}=${v}`)
         .join("; ");
+    } else {
+      delete currentHeaders["Cookie"];
     }
 
     const res = await fetch(currentUrl, {
@@ -46,17 +53,19 @@ async function fetchWithCookies(
       signal: AbortSignal.timeout(6000),
     });
 
-    // Capture and accumulate any Set-Cookie headers returned by server
-    const setCookies = (res.headers as any).getSetCookie
-      ? (res.headers as any).getSetCookie()
-      : [res.headers.get("set-cookie")].filter(Boolean);
+    // Capture and accumulate Set-Cookie headers only for same-origin responses
+    if (sameOrigin) {
+      const setCookies = (res.headers as any).getSetCookie
+        ? (res.headers as any).getSetCookie()
+        : [res.headers.get("set-cookie")].filter(Boolean);
 
-    for (const sc of setCookies) {
-      if (typeof sc === "string") {
-        const firstPart = sc.split(";")[0];
-        const [k, ...v] = firstPart.trim().split("=");
-        if (k && v.length) {
-          cookieMap.set(k.trim(), v.join("=").trim());
+      for (const sc of setCookies) {
+        if (typeof sc === "string") {
+          const firstPart = sc.split(";")[0];
+          const [k, ...v] = firstPart.trim().split("=");
+          if (k && v.length) {
+            cookieMap.set(k.trim(), v.join("=").trim());
+          }
         }
       }
     }
@@ -68,6 +77,11 @@ async function fetchWithCookies(
       continue;
     }
     return res;
+  }
+
+  const finalParsed = assertSafePublicUrl(currentUrl);
+  if (finalParsed.origin !== initialOrigin) {
+    delete currentHeaders["Cookie"];
   }
   return await fetch(currentUrl, {
     headers: currentHeaders,
@@ -87,7 +101,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const parsedUrl = new URL(url);
+    let parsedUrl: URL;
+    try {
+      parsedUrl = assertSafePublicUrl(url);
+    } catch (urlErr: any) {
+      return NextResponse.json(
+        { error: urlErr?.message || "Invalid or blocked URL." },
+        { status: 400 }
+      );
+    }
     const origin = parsedUrl.origin;
 
     const headers: Record<string, string> = {
@@ -98,7 +120,12 @@ export async function POST(req: NextRequest) {
       Referer: `${origin}/`,
     };
 
-    let cookieString = (cookie || process.env.FUO_COOKIE || "").trim();
+    const allowEnvFallback = process.env.ALLOW_SERVER_KEY_FALLBACK === "true";
+    let cookieString = (
+      cookie ||
+      (allowEnvFallback ? process.env.FUO_COOKIE : "") ||
+      ""
+    ).trim();
     if (cookieString) {
       // Auto-normalize if user pasted with colons or newlines: "xf_user:val\nxf_session:val" -> "xf_user=val; xf_session=val"
       cookieString = cookieString

@@ -3,7 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const apiKey = (body.apiKey || process.env.GEMINI_API_KEY || "").trim();
+    const allowEnvFallback = process.env.ALLOW_SERVER_KEY_FALLBACK === "true";
+    const apiKey = (
+      body.apiKey ||
+      (allowEnvFallback ? process.env.GEMINI_API_KEY : "") ||
+      ""
+    ).trim();
 
     if (!apiKey) {
       return NextResponse.json(
@@ -13,7 +18,12 @@ export async function POST(req: NextRequest) {
     }
 
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+      "https://generativelanguage.googleapis.com/v1beta/models",
+      {
+        headers: {
+          "x-goog-api-key": apiKey,
+        },
+      }
     );
 
     const data = await res.json();
