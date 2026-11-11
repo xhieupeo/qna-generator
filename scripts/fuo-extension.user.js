@@ -6,6 +6,8 @@
 // @author       QnA Generator Team
 // @match        https://fuoverflow.com/threads/*
 // @match        http://fuoverflow.com/threads/*
+// @match        https://fuexam.me/threads/*
+// @match        http://fuexam.me/threads/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // ==/UserScript==

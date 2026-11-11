@@ -147,8 +147,17 @@ export async function POST(req: NextRequest) {
     // 1. Fetch Thread HTML using custom cookie-preserving fetch
     const pageRes = await fetchWithCookies(url, headers);
     if (!pageRes.ok) {
+      if (pageRes.status === 403) {
+        return NextResponse.json(
+          {
+            error:
+              "Blocked by target site (HTTP 403 Forbidden). Sites behind Cloudflare or anti-bot firewalls block requests from Vercel server IPs and reject IP-bound cookies. Workaround: open the thread in your own browser, export it via the Tampermonkey script (scripts/fuo-extension.user.js) or Save As 'Webpage, Complete' (.zip), then upload it in the [ UPLOAD HTML / ZIP FILE ] tab.",
+          },
+          { status: 403 }
+        );
+      }
       return NextResponse.json(
-        { error: `Failed to fetch FU Overflow page: HTTP ${pageRes.status} ${pageRes.statusText}` },
+        { error: `Failed to fetch exam page: HTTP ${pageRes.status} ${pageRes.statusText}` },
         { status: 400 }
       );
     }
