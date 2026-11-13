@@ -1,40 +1,40 @@
 /**
- * Helper to check whether an email address is authorized to access the site.
- * Reads from NEXT_PUBLIC_ALLOWED_EMAILS (browser) and ALLOWED_EMAILS (server).
- * Format: comma-separated list of emails, e.g. "user1@fpt.edu.vn,user2@gmail.com"
+ * Master Admin Email & Whitelist authorization engine.
+ * xhieupeo@gmail.com is configured as the master authorized account.
  */
+export const PRIMARY_ADMIN_EMAIL = "xhieupeo@gmail.com";
+
 export function isEmailAuthorized(email: string | null | undefined): boolean {
   if (!email) return false;
+  const clean = email.trim().toLowerCase();
 
   const rawWhitelist =
     process.env.NEXT_PUBLIC_ALLOWED_EMAILS ||
     process.env.ALLOWED_EMAILS ||
-    "";
+    PRIMARY_ADMIN_EMAIL;
 
-  // If no whitelist is specified, all authenticated users are permitted
-  const trimmed = rawWhitelist.trim();
-  if (!trimmed || trimmed === "*") {
-    return true;
-  }
-
-  const allowedList = trimmed
+  const allowedList = rawWhitelist
     .split(",")
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
 
-  if (allowedList.length === 0) {
+  // If list is explicitly wildcard "*", allow all
+  if (allowedList.includes("*")) {
     return true;
   }
 
-  return allowedList.includes(email.trim().toLowerCase());
+  // Strictly check against whitelist (which defaults to xhieupeo@gmail.com)
+  return allowedList.includes(clean);
 }
 
 export function getAllowedEmailsList(): string[] {
   const raw =
     process.env.NEXT_PUBLIC_ALLOWED_EMAILS ||
     process.env.ALLOWED_EMAILS ||
-    "";
-  if (!raw.trim() || raw.trim() === "*") return [];
+    PRIMARY_ADMIN_EMAIL;
+
+  if (raw.trim() === "*") return ["* (All)"];
+
   return raw
     .split(",")
     .map((e) => e.trim().toLowerCase())
