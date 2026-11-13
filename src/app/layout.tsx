@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import "@/styles/globals.css";
+import { AuthGate } from "@/components/auth/AuthGate";
+import { UserNav } from "@/components/auth/UserNav";
 
 export const metadata: Metadata = {
   title: "QnA Generator | Multimodal HTML-to-MCQ Platform",
@@ -50,13 +52,14 @@ export default function RootLayout({
             </div>
 
             <div className="flex items-center gap-3">
+              <UserNav />
             </div>
           </div>
         </header>
 
         {/* Main Content Viewport */}
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {children}
+          <AuthGate>{children}</AuthGate>
         </main>
 
         {/* Technical Footer */}
