@@ -9,6 +9,7 @@ export interface GenerateMcqOptions {
   modelName?: string;
   language?: string;
   temperature?: number;
+  title?: string;
 }
 
 /**
@@ -176,7 +177,19 @@ export async function generateQuestionFromUnit(
     }
   }
 
-  // 2. Prompt instructions (with Think-First OCR Transcription)
+  // 2. Prompt instructions (with Course Context & Domain Integrity)
+  const examTitle = options.title || "";
+  const subjectMatch = examTitle.match(/\b([A-Za-z]{2,4}\d{2,4}[A-Za-z]?)\b/);
+  const subjectCode = subjectMatch ? subjectMatch[1].toUpperCase() : "";
+
+  const subjectDirective = subjectCode
+    ? `\nAcademic Subject / Course Context: ${subjectCode} (${examTitle}).
+CRITICAL COURSE INTEGRITY RULES:
+- All questions, OCR transcriptions, options, and explanations MUST strictly belong to the field of ${subjectCode} (e.g. Databases / SQL / Normalization for DBI202, Java / OOP for PRO192, Discrete Math for MAD101, Data Structures for CSD201).
+- Under NO circumstances should you fabricate, replace, or hallucinate unrelated primary-school math/algebra equations (such as "2x + 5 = 13")!
+- If the question in the image is a True/False question (e.g. "A. True", "B. False"), faithfully transcribe and solve it as True/False (you may include 2 plausible contextual distractors if 4 choices are required, or keep True/False marked correctly).\n`
+    : "";
+
   const communityContext = unit.communityAnswer
     ? `\nNote: Student community discussion on FU Overflow suggests answer: "${unit.communityAnswer}". Cross-examine this answer critically; verify whether it is genuinely correct or a common misconception/trap.\n`
     : "";
@@ -184,6 +197,7 @@ export async function generateQuestionFromUnit(
   const promptInstruction = `
 You are an expert exam designer, OCR specialist, and subject-matter professor.
 You are given content extracted from an HTML document or exam thread (text and/or diagrams/images).
+${subjectDirective}
 ${communityContext}
 Raw Extracted Context:
 """
@@ -197,10 +211,10 @@ Instructions (Think-First Inverted Strategy):
    - If there is program code, format it inside fenced markdown code blocks with the language identifier (e.g. \`\`\`java).
    - Preserve Vietnamese or English accents exactly as shown.
 2. **Question Solving**:
-   - If the input does NOT provide answers or choices, SOLVE the problem yourself with absolute mathematical and logical rigor.
-   - Formulate exactly 4 plausible, distinct multiple choice options:
-     - 1 option MUST be the strictly correct answer.
-     - 3 options MUST be realistic distractors (e.g. based on common student misconceptions, calculation slips, or inverted axes).
+   - Solve the problem faithfully within the context of the course subject.
+   - If the input is True/False, preserve the True/False options and select the correct option index accurately.
+   - Formulate distinct options (1 strictly correct, and realistic distractors based on common student misconceptions or subtle syntax errors).
+   - NEVER invent an unrelated question from another academic subject.
 3. **JSON Output Format**:
    Return a valid JSON object matching this structure:
    {

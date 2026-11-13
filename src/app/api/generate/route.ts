@@ -85,7 +85,7 @@ function buildModelCascade(
  */
 async function generateWithCascade(
   unit: ExtractedUnit,
-  options: { apiKey: string; modelName: string; language: string; fallbackModels?: string[] },
+  options: { apiKey: string; modelName: string; language: string; fallbackModels?: string[]; title?: string },
   provider: "gemini" | "openrouter" = "gemini"
 ): Promise<{ question: Question; usedModel: string; switchedFromModel?: string }> {
   const isOR =
@@ -111,6 +111,7 @@ async function generateWithCascade(
         modelName: candidateModel,
         language: options.language,
         temperature: temperatureOverride,
+        title: options.title,
       });
       return {
         question,
@@ -267,6 +268,7 @@ export async function POST(req: NextRequest) {
             modelName: currentModel,
             language,
             fallbackModels,
+            title,
           },
           provider
         );

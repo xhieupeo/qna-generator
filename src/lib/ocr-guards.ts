@@ -29,11 +29,18 @@ export function assertNoDegenerativeRepetition(text: string): void {
  * and has no actual image attached, meaning calling the AI would hallucinate a fake question.
  */
 export function isFilenameStubWithoutImage(unit: ExtractedUnit): boolean {
-  const hasValidImage = Array.isArray(unit.images) && unit.images.some((img) => Boolean(img.base64Data));
+  const hasValidImage =
+    Array.isArray(unit.images) &&
+    unit.images.some((img) => Boolean(img.base64Data && img.base64Data.length > 200));
   if (hasValidImage) return false;
   if (unit.imageError) return true;
   const trimmed = (unit.rawText || "").trim();
   if (!trimmed) return true;
-  return /^Question\s+\d+(?:\s*\([^)]+\))?$/i.test(trimmed);
+
+  // Catches filename placeholders and generic diagram/screenshot directives when image payload is empty
+  if (/^Question\s+\d+(?:\s*\([^)]+\))?$/i.test(trimmed)) return true;
+  if (/Solve the question shown in the (?:diagram|screenshot|image)/i.test(trimmed)) return true;
+
+  return false;
 }
 

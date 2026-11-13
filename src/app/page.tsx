@@ -471,6 +471,131 @@ export default function HomePage() {
     }
   };
 
+  // Parse HTML or ZIP directly in the browser to avoid Vercel 4.5MB payload limit errors
+  const parseExamFileClientSide = async (
+    fileToParse: File
+  ): Promise<{ title: string; units: ExtractedUnit[] } | null> => {
+    try {
+      let htmlContent = "";
+      const assetFiles = new Map<string, { mimeType: string; base64Data: string }>();
+      const lowerName = fileToParse.name.toLowerCase();
+
+      if (lowerName.endsWith(".zip")) {
+        const JSZip = (await import("jszip")).default;
+        const arrayBuffer = await fileToParse.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
+
+        let htmlEntry: any = null;
+        for (const [relPath, entry] of Object.entries(zip.files)) {
+          if (!entry.dir && (relPath.endsWith(".html") || relPath.endsWith(".htm"))) {
+            htmlEntry = entry;
+            break;
+          }
+        }
+
+        if (!htmlEntry) return null;
+        htmlContent = await htmlEntry.async("text");
+
+        for (const [relPath, entry] of Object.entries(zip.files)) {
+          if (!entry.dir) {
+            const lower = relPath.toLowerCase();
+            let mimeType = "";
+            if (lower.endsWith(".png")) mimeType = "image/png";
+            else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) mimeType = "image/jpeg";
+            else if (lower.endsWith(".webp")) mimeType = "image/webp";
+            else if (lower.endsWith(".gif")) mimeType = "image/gif";
+            if (mimeType) {
+              const base64Data = await entry.async("base64");
+              assetFiles.set(relPath, { mimeType, base64Data });
+            }
+          }
+        }
+      } else if (lowerName.endsWith(".html") || lowerName.endsWith(".htm")) {
+        htmlContent = await fileToParse.text();
+      } else {
+        return null;
+      }
+
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlContent, "text/html");
+
+      let title = "";
+      const h1 = doc.querySelector("h1.p-title-value") || doc.querySelector("h1");
+      if (h1) {
+        const clone = h1.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll(".label, .label-append").forEach((el) => el.remove());
+        title = clone.textContent?.replace(/\s+/g, " ").trim() || "";
+      }
+      if (!title) {
+        title = doc.title?.replace(/\s+/g, " ").trim() || fileToParse.name.replace(/\.[^/.]+$/, "");
+      }
+
+      const questionBlocks = doc.querySelectorAll(".question");
+      if (questionBlocks.length === 0) return null;
+
+      const units: ExtractedUnit[] = [];
+      questionBlocks.forEach((block, idx) => {
+        const qNum = idx + 1;
+        const images: any[] = [];
+
+        block.querySelectorAll("img").forEach((img, imgIdx) => {
+          const src = img.getAttribute("src") || "";
+          let mimeType = "image/jpeg";
+          let base64Data = "";
+
+          if (src.startsWith("data:")) {
+            const match = src.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              mimeType = match[1];
+              base64Data = match[2];
+            }
+          } else if (assetFiles.size > 0) {
+            const cleanSrc = src.replace(/^\.\//, "").replace(/^\//, "").split("?")[0];
+            for (const [filename, asset] of Array.from(assetFiles.entries())) {
+              const cleanFile = filename.split("?")[0];
+              if (cleanFile.endsWith(cleanSrc) || cleanSrc.endsWith(cleanFile)) {
+                mimeType = asset.mimeType;
+                base64Data = asset.base64Data;
+                break;
+              }
+            }
+          }
+
+          if (base64Data) {
+            images.push({
+              id: `img_${qNum}_${imgIdx}`,
+              mimeType,
+              base64Data,
+              src: src.slice(0, 100),
+            });
+          }
+        });
+
+        let communityAnswer: string | undefined = undefined;
+        const commEl = block.querySelector(".community-answer");
+        if (commEl) {
+          const commText = commEl.textContent || "";
+          const m = commText.match(/\[\s*COMMUNITY CONSENSUS ANSWER\s*\]:\s*([A-F]+)/i);
+          if (m) communityAnswer = m[1].toUpperCase();
+        }
+
+        const rawText = block.textContent?.replace(/\s+/g, " ").trim() || "";
+        units.push({
+          id: `unit_${qNum}`,
+          questionNumber: qNum,
+          rawText,
+          images,
+          communityAnswer,
+        });
+      });
+
+      return { title, units };
+    } catch (e) {
+      console.warn("Client-side parse error, falling back to server:", e);
+      return null;
+    }
+  };
+
   // Generate from uploaded HTML or ZIP file (pre-parsed first, then solved progressively)
   const handleGenerateFromFile = async () => {
     if (!file) {
@@ -493,23 +618,34 @@ export default function HomePage() {
     setSaveSuccessMsg(null);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
+      let units: ExtractedUnit[] = [];
+      let title = "";
 
-      const parseRes = await fetch("/api/parse", {
-        method: "POST",
-        body: formData,
-      });
+      // 1. Try instant client-side parsing first (bypasses Vercel 4.5MB payload limit completely)
+      const clientParsed = await parseExamFileClientSide(file);
+      if (clientParsed && clientParsed.units.length > 0) {
+        units = clientParsed.units;
+        title = clientParsed.title;
+      } else {
+        // 2. Server fallback if client parse didn't find question classes
+        const formData = new FormData();
+        formData.append("file", file);
 
-      const parseData = await safeJson(parseRes);
-      if (!parseRes.ok) {
-        throw new Error(parseData.error || "Failed to parse uploaded file");
+        const parseRes = await fetch("/api/parse", {
+          method: "POST",
+          body: formData,
+        });
+
+        const parseData = await safeJson(parseRes);
+        if (!parseRes.ok) {
+          throw new Error(parseData.error || "Failed to parse uploaded file");
+        }
+
+        units = parseData.units || [];
+        const fallbackTitle = file.name.replace(/\.[^/.]+$/, "");
+        title =
+          parseData.title && parseData.title !== "Generated Quiz" ? parseData.title : fallbackTitle;
       }
-
-      let units: ExtractedUnit[] = parseData.units || [];
-      const fallbackTitle = file.name.replace(/\.[^/.]+$/, "");
-      const title =
-        parseData.title && parseData.title !== "Generated Quiz" ? parseData.title : fallbackTitle;
 
       if (questionLimit !== "all") {
         const num = parseInt(questionLimit, 10);
