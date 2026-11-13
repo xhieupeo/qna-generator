@@ -15,7 +15,6 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
-  const [showInitButton, setShowInitButton] = useState(false);
 
   useEffect(() => {
     if (!supabase) {
@@ -44,22 +43,60 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || !emailInput.trim() || !passwordInput) return;
+    if (!supabase || !emailInput.trim()) return;
+
+    if (!passwordInput.trim()) {
+      setErrorMessage("Please enter your password in the Master Password field.");
+      return;
+    }
 
     setIsSubmitting(true);
     setErrorMessage(null);
     setInfoMessage(null);
 
     try {
+      // 1. Attempt standard password login
       const { error } = await supabase.auth.signInWithPassword({
         email: emailInput.trim(),
         password: passwordInput,
       });
 
       if (error) {
-        if (error.message.toLowerCase().includes("invalid login credentials")) {
-          setShowInitButton(true);
+        // 2. If user does not exist in Supabase yet, automatically initialize it!
+        if (
+          error.message.toLowerCase().includes("invalid login credentials") ||
+          error.message.toLowerCase().includes("user not found")
+        ) {
+          setInfoMessage("First-time setup detected. Initializing your admin account with this password...");
+
+          const initRes = await fetch("/api/auth/setup-admin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: emailInput.trim(),
+              password: passwordInput,
+            }),
+          });
+
+          const initData = await initRes.json();
+          if (!initRes.ok) {
+            throw new Error(initData.error || "Failed to initialize admin account.");
+          }
+
+          // Retry login now that user is created and confirmed
+          const retry = await supabase.auth.signInWithPassword({
+            email: emailInput.trim(),
+            password: passwordInput,
+          });
+
+          if (retry.error) {
+            throw retry.error;
+          }
+
+          setInfoMessage("✓ Admin account initialized and logged in successfully!");
+          return;
         }
+
         throw error;
       }
     } catch (err: any) {
@@ -70,6 +107,11 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   };
 
   const handleInitializeAdmin = async () => {
+    if (!passwordInput.trim()) {
+      setErrorMessage("Please type your password into the 'Master Password' box above first, then click Sync.");
+      return;
+    }
+
     setIsSubmitting(true);
     setErrorMessage(null);
     setInfoMessage("Synchronizing master admin account with Supabase...");
@@ -90,7 +132,6 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       }
 
       setInfoMessage(`✓ ${data.message} Logging you in now...`);
-      setShowInitButton(false);
 
       // Auto login right away
       if (supabase && passwordInput) {
@@ -289,24 +330,6 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           </div>
         )}
 
-        {/* Sync Admin Account Button (Appears if user not found in Supabase yet) */}
-        {showInitButton && (
-          <div className="mb-5 p-3 bg-blue-50 border-2 border-blue-600 text-slate-900 text-xs font-mono">
-            <p className="mb-2 font-bold">[ ADMIN ACCOUNT SYNC REQUIRED ]</p>
-            <p className="text-[11px] text-slate-600 mb-3">
-              If this is your first time logging in, click below to automatically create and verify <strong>{PRIMARY_ADMIN_EMAIL}</strong> with your master password in Supabase:
-            </p>
-            <button
-              type="button"
-              onClick={handleInitializeAdmin}
-              disabled={isSubmitting}
-              className="w-full py-2 bg-slate-900 hover:bg-blue-700 text-white font-mono text-xs font-bold uppercase border border-slate-900 transition-colors shadow-[2px_2px_0px_#000]"
-            >
-              {isSubmitting ? "[ INITIALIZING... ]" : "[ ⚡ SYNC / INITIALIZE MASTER ADMIN ACCOUNT ]"}
-            </button>
-          </div>
-        )}
-
         {/* Tab Switcher: Password (Default) vs 6-Digit Code */}
         <div className="flex border-2 border-slate-900 mb-4 bg-slate-100">
           <button
@@ -364,9 +387,12 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 required
                 value={passwordInput}
                 onChange={(e) => setPasswordInput(e.target.value)}
-                placeholder="••••••••"
+                placeholder="Enter password..."
                 className="w-full px-3 py-2 border-2 border-slate-900 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-blue-600 rounded-none bg-slate-50"
               />
+              <p className="text-[11px] text-slate-500 mt-1 font-sans">
+                First time? Enter your desired password and click Sign In—it will be automatically created and confirmed.
+              </p>
             </div>
 
             <button
@@ -374,7 +400,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
               disabled={isSubmitting || !emailInput.trim() || !passwordInput}
               className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-mono text-xs font-bold uppercase border-2 border-slate-900 shadow-[3px_3px_0px_#0f172a] transition-all"
             >
-              {isSubmitting ? "[ VERIFYING... ]" : "[ SIGN IN WITH PASSWORD ]"}
+              {isSubmitting ? "[ VERIFYING / INITIALIZING... ]" : "[ SIGN IN WITH PASSWORD ]"}
             </button>
 
             <div className="pt-2 text-center">
@@ -383,7 +409,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 onClick={handleInitializeAdmin}
                 className="text-[11px] text-slate-500 hover:text-slate-900 underline font-mono"
               >
-                Need to sync / initialize master account in Supabase? Click here.
+                Sync master password with Supabase
               </button>
             </div>
           </form>
