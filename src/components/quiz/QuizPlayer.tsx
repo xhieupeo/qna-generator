@@ -14,6 +14,7 @@ import {
   FileText,
   Maximize2,
   X,
+  Check,
 } from "lucide-react";
 
 interface QuizPlayerProps {
@@ -28,7 +29,7 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
   onExit,
 }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
+  const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number[]>>({});
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [viewMode, setViewMode] = useState<"image" | "text">("image");
   const [showImageModal, setShowImageModal] = useState(false);
@@ -38,16 +39,37 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
 
   const handleSelect = (optionIndex: number) => {
     if (isSubmitted) return;
-    setSelectedAnswers((prev) => ({
-      ...prev,
-      [currentIndex]: optionIndex,
-    }));
+    setSelectedAnswers((prev) => {
+      const current = prev[currentIndex] || [];
+      const next = current.includes(optionIndex)
+        ? current.filter((i) => i !== optionIndex)
+        : [...current, optionIndex].sort((a, b) => a - b);
+      return {
+        ...prev,
+        [currentIndex]: next,
+      };
+    });
+  };
+
+  const getQuestionCorrectIndices = (q: Question): number[] => {
+    if (Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0) {
+      return q.correctOptionIndices;
+    }
+    if (typeof q.correctOptionIndex === "number") {
+      return [q.correctOptionIndex];
+    }
+    return [0];
   };
 
   const calculateScore = () => {
     let score = 0;
     questions.forEach((q, idx) => {
-      if (selectedAnswers[idx] === q.correctOptionIndex) {
+      const correct = getQuestionCorrectIndices(q);
+      const selected = selectedAnswers[idx] || [];
+      const isCorrect =
+        correct.length === selected.length &&
+        correct.every((val) => selected.includes(val));
+      if (isCorrect) {
         score++;
       }
     });
@@ -138,12 +160,16 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
       {/* Question Number Palette for Fast Jumping */}
       <div className="flex flex-wrap gap-1.5 mb-6 p-3 bg-slate-100 border border-slate-300">
         {questions.map((q, idx) => {
-          const isAnswered = selectedAnswers[idx] !== undefined;
+          const userAns = selectedAnswers[idx] || [];
+          const isAnswered = userAns.length > 0;
           const isCurrent = idx === currentIndex;
           let btnClass = "bg-white text-slate-700 border-slate-400";
 
           if (isSubmitted) {
-            const isCorrect = selectedAnswers[idx] === q.correctOptionIndex;
+            const correct = getQuestionCorrectIndices(q);
+            const isCorrect =
+              correct.length === userAns.length &&
+              correct.every((val) => userAns.includes(val));
             btnClass = isCorrect
               ? "bg-emerald-600 text-white border-emerald-700"
               : "bg-red-600 text-white border-red-700";
@@ -171,9 +197,16 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
       {/* Main Question Display Area */}
       <div className="space-y-4">
         <div className="flex items-center justify-between text-xs font-mono text-slate-500">
-          <span>
-            QUESTION {currentIndex + 1} OF {questions.length}
-          </span>
+          <div className="flex items-center gap-2">
+            <span>
+              QUESTION {currentIndex + 1} OF {questions.length}
+            </span>
+            {getQuestionCorrectIndices(currentQ).length > 1 && (
+              <span className="text-[11px] font-mono text-blue-700 bg-blue-50 border border-blue-300 px-2 py-0.5 font-bold uppercase">
+                [ SELECT ALL THAT APPLY ({getQuestionCorrectIndices(currentQ).length} ANSWERS) ]
+              </span>
+            )}
+          </div>
           {currentQ.topic && (
             <span className="uppercase bg-slate-100 px-2 py-0.5 border border-slate-200">
               {currentQ.topic}
@@ -258,8 +291,11 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
         {/* Option choices */}
         <div className="space-y-2.5 pt-2">
           {currentQ.options.map((option, optIdx) => {
-            const isSelected = selectedAnswers[currentIndex] === optIdx;
-            const isCorrect = optIdx === currentQ.correctOptionIndex;
+            const currentSelected = selectedAnswers[currentIndex] || [];
+            const isSelected = currentSelected.includes(optIdx);
+
+            const correctIndices = getQuestionCorrectIndices(currentQ);
+            const isCorrect = correctIndices.includes(optIdx);
 
             let rowClass =
               "border-slate-300 bg-white hover:bg-slate-50 text-slate-900";
@@ -285,13 +321,17 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
                 className={`w-full text-left flex items-center gap-3 p-3.5 border transition-all ${rowClass}`}
               >
                 <div
-                  className={`w-7 h-7 flex items-center justify-center font-mono text-xs font-bold border ${
+                  className={`w-7 h-7 flex items-center justify-center font-mono text-xs font-bold border transition-colors ${
                     isSelected
                       ? "bg-slate-900 text-white border-slate-900"
                       : "bg-white text-slate-700 border-slate-400"
                   }`}
                 >
-                  {optionLetters[optIdx]}
+                  {isSelected ? (
+                    <Check className="w-4 h-4 stroke-[3]" />
+                  ) : (
+                    optionLetters[optIdx]
+                  )}
                 </div>
                 <div className="flex-1 text-sm">
                   <LatexRenderer content={option} />

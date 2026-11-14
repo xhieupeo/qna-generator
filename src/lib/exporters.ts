@@ -6,11 +6,25 @@ import { Question, Quiz } from "./types";
 export function exportToGift(questions: Question[]): string {
   return questions
     .map((q) => {
-      const optionLetters = ["A", "B", "C", "D"];
+      const correctIndices =
+        Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0
+          ? q.correctOptionIndices
+          : typeof q.correctOptionIndex === "number"
+          ? [q.correctOptionIndex]
+          : [0];
+      const isMultiple = correctIndices.length > 1;
+      const weight = isMultiple ? Math.round(100 / correctIndices.length) : 100;
+
       const answers = q.options
         .map((opt, i) => {
-          const isCorrect = i === q.correctOptionIndex;
-          const prefix = isCorrect ? "=" : "~";
+          const isCorrect = correctIndices.includes(i);
+          const prefix = isMultiple
+            ? isCorrect
+              ? `~%${weight}%`
+              : `~`
+            : isCorrect
+            ? "="
+            : "~";
           return `  ${prefix}${opt.replace(/[={}]/g, "\\$&")}`;
         })
         .join("\n");
@@ -34,9 +48,17 @@ export function exportToAiken(questions: Question[]): string {
       const optionsText = q.options
         .map((opt, i) => `${letters[i]}. ${opt}`)
         .join("\n");
-      const answerLetter = letters[q.correctOptionIndex] || "A";
+      const correctIndices =
+        Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0
+          ? q.correctOptionIndices
+          : typeof q.correctOptionIndex === "number"
+          ? [q.correctOptionIndex]
+          : [0];
+      const answerLetters = correctIndices
+        .map((idx) => letters[idx] || "A")
+        .join(", ");
 
-      return `${q.questionText}\n${optionsText}\nANSWER: ${answerLetter}`;
+      return `${q.questionText}\n${optionsText}\nANSWER: ${answerLetters}`;
     })
     .join("\n\n");
 }
@@ -69,6 +91,16 @@ export function exportToCsv(questions: Question[]): string {
 
   const rows = questions.map((q) => {
     const letters = ["A", "B", "C", "D"];
+    const correctIndices =
+      Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0
+        ? q.correctOptionIndices
+        : typeof q.correctOptionIndex === "number"
+        ? [q.correctOptionIndex]
+        : [0];
+    const answerLetters = correctIndices
+      .map((idx) => letters[idx] || "A")
+      .join(", ");
+
     return [
       q.questionNumber,
       q.questionText,
@@ -76,7 +108,7 @@ export function exportToCsv(questions: Question[]): string {
       q.options[1] || "",
       q.options[2] || "",
       q.options[3] || "",
-      letters[q.correctOptionIndex] || "A",
+      answerLetters,
       q.explanation,
       q.topic || "",
       q.difficulty || "Medium",

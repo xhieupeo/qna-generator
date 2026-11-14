@@ -119,6 +119,13 @@ export async function saveQuestionBatch(
       }
     }
 
+    const correctIndices =
+      Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0
+        ? q.correctOptionIndices
+        : typeof q.correctOptionIndex === "number"
+        ? [q.correctOptionIndex]
+        : [0];
+
     questionInserts.push({
       quiz_id: quizId,
       question_number: q.questionNumber,
@@ -126,7 +133,8 @@ export async function saveQuestionBatch(
       transcribed_text: q.transcribedText || null,
       image_url: finalImageUrl,
       options: q.options,
-      correct_option_index: q.correctOptionIndex,
+      correct_option_index: correctIndices[0] ?? 0,
+      correct_option_indices: correctIndices,
       explanation: q.explanation,
       topic: q.topic || "General",
       difficulty: q.difficulty || "Medium",
@@ -195,6 +203,13 @@ export async function saveQuizToSupabase(params: {
       }
     }
 
+    const correctIndices =
+      Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0
+        ? q.correctOptionIndices
+        : typeof q.correctOptionIndex === "number"
+        ? [q.correctOptionIndex]
+        : [0];
+
     questionInserts.push({
       quiz_id: quizId,
       question_number: q.questionNumber,
@@ -202,7 +217,8 @@ export async function saveQuizToSupabase(params: {
       transcribed_text: q.transcribedText || null,
       image_url: finalImageUrl,
       options: q.options,
-      correct_option_index: q.correctOptionIndex,
+      correct_option_index: correctIndices[0] ?? 0,
+      correct_option_indices: correctIndices,
       explanation: q.explanation,
       topic: q.topic || "General",
       difficulty: q.difficulty || "Medium",

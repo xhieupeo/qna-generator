@@ -92,7 +92,8 @@ Instructions (Think-First Inverted Strategy):
 2. **Question Solving**:
    - Solve the problem faithfully within the context of the course subject.
    - If the input is True/False, preserve the True/False options and select the correct option index accurately.
-   - Formulate distinct multiple choice options (1 strictly correct, and realistic distractors).
+   - Formulate distinct options (realistic distractors based on common student misconceptions or subtle syntax errors).
+   - If the question allows multiple answers (e.g. "select all that apply" or multiple true statements), include all correct 0-based indices in "correctOptionIndices". For single-answer questions, include only the one correct index in "correctOptionIndices".
    - NEVER invent an unrelated question from another academic subject.
 3. **JSON Output Format**:
    You MUST return ONLY a valid JSON object matching this structure:
@@ -101,6 +102,7 @@ Instructions (Think-First Inverted Strategy):
      "questionText": "The complete question prompt or problem statement",
      "options": ["Option A", "Option B", "Option C", "Option D"],
      "correctOptionIndex": 0,
+     "correctOptionIndices": [0],
      "explanation": "Detailed step-by-step pedagogical explanation of the correct solution",
      "topic": "The primary subject or topic of this question",
      "difficulty": "Easy, Medium, or Hard"
@@ -192,6 +194,23 @@ Instructions (Think-First Inverted Strategy):
   const rawText = data?.choices?.[0]?.message?.content || "";
   const parsed = extractJsonFromResponse(rawText);
 
+  const primaryCorrectIndex =
+    typeof parsed.correctOptionIndex === "number" &&
+    parsed.correctOptionIndex >= 0 &&
+    parsed.correctOptionIndex < 4
+      ? parsed.correctOptionIndex
+      : 0;
+
+  let correctIndices: number[] = [];
+  if (Array.isArray(parsed.correctOptionIndices) && parsed.correctOptionIndices.length > 0) {
+    correctIndices = parsed.correctOptionIndices
+      .filter((idx: any) => typeof idx === "number" && idx >= 0 && idx < 4)
+      .sort((a: number, b: number) => a - b);
+  }
+  if (correctIndices.length === 0) {
+    correctIndices = [primaryCorrectIndex];
+  }
+
   return {
     questionNumber: unit.questionNumber || 1,
     transcribedText: parsed.transcribedText || parsed.questionText || unit.rawText || "",
@@ -201,10 +220,8 @@ Instructions (Think-First Inverted Strategy):
     options: Array.isArray(parsed.options) && parsed.options.length > 0
       ? parsed.options
       : ["Option A", "Option B", "Option C", "Option D"],
-    correctOptionIndex:
-      typeof parsed.correctOptionIndex === "number" && parsed.correctOptionIndex >= 0 && parsed.correctOptionIndex < 4
-        ? parsed.correctOptionIndex
-        : 0,
+    correctOptionIndex: correctIndices[0] ?? primaryCorrectIndex,
+    correctOptionIndices: correctIndices,
     explanation: parsed.explanation || "",
     topic: parsed.topic || "General",
     difficulty: (parsed.difficulty as any) || "Medium",

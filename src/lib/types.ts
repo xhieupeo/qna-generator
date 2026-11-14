@@ -10,7 +10,8 @@ export interface Question {
   imageBase64?: string | null;
   imageMimeType?: string | null;
   options: string[];
-  correctOptionIndex: number;
+  correctOptionIndex?: number; // Single choice index (0-based) for backward compatibility
+  correctOptionIndices: number[]; // Array of correct option indices (e.g. [0] or [0, 2] for multiple answers)
   explanation: string;
   topic?: string;
   difficulty?: DifficultyLevel;
@@ -48,7 +49,7 @@ export interface QuizAttempt {
   quizId: string;
   score: number;
   total: number;
-  userAnswers: Record<number, number>; // questionIndex -> selectedOptionIndex
+  userAnswers: Record<number, number[]>; // questionIndex -> array of selected option indices (e.g. [0] or [0, 2])
   completedAt: string;
 }
 

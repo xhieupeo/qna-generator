@@ -57,8 +57,29 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
     handleTextChange("options", newOptions);
   };
 
-  const handleCorrectOptionSelect = (optIdx: number) => {
-    handleTextChange("correctOptionIndex", optIdx);
+  const currentCorrectIndices =
+    Array.isArray(question.correctOptionIndices) && question.correctOptionIndices.length > 0
+      ? question.correctOptionIndices
+      : typeof question.correctOptionIndex === "number"
+      ? [question.correctOptionIndex]
+      : [0];
+
+  const handleToggleCorrectOption = (optIdx: number) => {
+    let next: number[];
+    if (currentCorrectIndices.includes(optIdx)) {
+      if (currentCorrectIndices.length > 1) {
+        next = currentCorrectIndices.filter((i) => i !== optIdx);
+      } else {
+        next = [optIdx];
+      }
+    } else {
+      next = [...currentCorrectIndices, optIdx].sort((a, b) => a - b);
+    }
+    onUpdate({
+      ...question,
+      correctOptionIndices: next,
+      correctOptionIndex: next[0] ?? 0,
+    });
   };
 
   const handleCopyText = () => {
@@ -115,6 +136,11 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
           >
             [ {question.difficulty || "MEDIUM"} ]
           </span>
+          {currentCorrectIndices.length > 1 && (
+            <span className="font-mono text-xs text-blue-700 bg-blue-50 border border-blue-300 px-2 py-0.5 uppercase font-bold">
+              [ MULTI-ANSWER ({currentCorrectIndices.length}) ]
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -277,16 +303,23 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
 
         {/* Options Grid */}
         <div className="space-y-2">
-          <label className="block text-xs font-mono uppercase text-slate-500 font-semibold">
-            Options (Click radio to select correct answer):
-          </label>
+          <div className="flex flex-wrap items-center justify-between gap-1">
+            <label className="block text-xs font-mono uppercase text-slate-500 font-semibold">
+              Options (Click checkbox to select one or multiple correct answers):
+            </label>
+            {currentCorrectIndices.length > 1 && (
+              <span className="text-[11px] font-mono text-emerald-700 bg-emerald-50 border border-emerald-300 px-2 py-0.5 font-bold uppercase">
+                {currentCorrectIndices.length} CORRECT ANSWERS SELECTED
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
             {question.options.map((option, optIdx) => {
-              const isCorrect = question.correctOptionIndex === optIdx;
+              const isCorrect = currentCorrectIndices.includes(optIdx);
               return (
                 <div
                   key={optIdx}
-                  onClick={() => isEditing && handleCorrectOptionSelect(optIdx)}
+                  onClick={() => handleToggleCorrectOption(optIdx)}
                   className={`p-3 border flex items-start gap-2.5 transition-colors cursor-pointer ${
                     isCorrect
                       ? "border-emerald-600 bg-emerald-50 text-emerald-950 font-medium"
@@ -297,16 +330,17 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleCorrectOptionSelect(optIdx);
+                      handleToggleCorrectOption(optIdx);
                     }}
                     className={`shrink-0 w-5 h-5 flex items-center justify-center font-mono text-xs font-bold border transition-colors ${
                       isCorrect
                         ? "bg-emerald-600 border-emerald-600 text-white"
                         : "border-slate-400 bg-white text-slate-600 hover:border-slate-900"
                     }`}
+                    title={isCorrect ? "Correct answer (click to deselect)" : "Click to select as correct answer"}
                   >
                     {isCorrect ? (
-                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <Check className="w-3.5 h-3.5 stroke-[3]" />
                     ) : (
                       optionLetters[optIdx]
                     )}
@@ -317,6 +351,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                       <input
                         type="text"
                         value={option}
+                        onClick={(e) => e.stopPropagation()}
                         onChange={(e) => handleOptionChange(optIdx, e.target.value)}
                         className="w-full text-xs border border-slate-300 px-2 py-1 bg-white focus:outline-none focus:border-slate-900"
                       />

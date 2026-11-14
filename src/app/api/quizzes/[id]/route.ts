@@ -76,18 +76,27 @@ export async function GET(
         totalQuestions: quiz.total_questions,
         createdAt: quiz.created_at,
         updatedAt: quiz.updated_at,
-        questions: (questions || []).map((q) => ({
-          id: q.id,
-          quizId: q.quiz_id,
-          questionNumber: q.question_number,
-          questionText: q.question_text,
-          imageUrl: q.image_url,
-          options: q.options,
-          correctOptionIndex: q.correct_option_index,
-          explanation: q.explanation,
-          topic: q.topic,
-          difficulty: q.difficulty,
-        })),
+        questions: (questions || []).map((q) => {
+          const rawIndices = q.correct_option_indices;
+          const parsedIndices =
+            Array.isArray(rawIndices) && rawIndices.length > 0
+              ? rawIndices
+              : [q.correct_option_index ?? 0];
+
+          return {
+            id: q.id,
+            quizId: q.quiz_id,
+            questionNumber: q.question_number,
+            questionText: q.question_text,
+            imageUrl: q.image_url,
+            options: q.options,
+            correctOptionIndex: parsedIndices[0] ?? (q.correct_option_index ?? 0),
+            correctOptionIndices: parsedIndices,
+            explanation: q.explanation,
+            topic: q.topic,
+            difficulty: q.difficulty,
+          };
+        }),
       },
     });
   } catch (err: any) {
