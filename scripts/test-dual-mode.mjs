@@ -78,7 +78,7 @@ function resolveViewMode({
   if (preferredViewMode === "split" && hasImage) return "split";
   if (isDiagramDependent && hasImage) return "image";
 
-  return hasImage ? "auto" : "text";
+  return "text";
 }
 
 // 1. Auto mode with diagram-dependent question -> Image

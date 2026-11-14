@@ -69,7 +69,7 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
     if (currentQ?.preferredViewMode === "split" && imageSrc) return "split";
     if (isCurrentDiagramDependent && imageSrc) return "image";
 
-    return imageSrc ? "auto" : "text";
+    return "text";
   })();
 
   const isImagePrimary =
