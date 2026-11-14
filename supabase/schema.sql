@@ -26,12 +26,15 @@ CREATE TABLE IF NOT EXISTS questions (
     explanation TEXT NOT NULL,
     topic TEXT,
     difficulty TEXT CHECK (difficulty IN ('Easy', 'Medium', 'Hard')) DEFAULT 'Medium',
+    preferred_view_mode VARCHAR(20) DEFAULT 'auto' CHECK (preferred_view_mode IN ('auto', 'image', 'text', 'split')),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Migration for existing databases:
 -- ALTER TABLE questions ADD COLUMN IF NOT EXISTS correct_option_indices JSONB DEFAULT '[]'::jsonb;
 -- UPDATE questions SET correct_option_indices = jsonb_build_array(correct_option_index) WHERE correct_option_indices = '[]'::jsonb OR correct_option_indices IS NULL;
+-- ALTER TABLE questions ADD COLUMN IF NOT EXISTS preferred_view_mode VARCHAR(20) DEFAULT 'auto' CHECK (preferred_view_mode IN ('auto', 'image', 'text', 'split'));
+-- UPDATE questions SET preferred_view_mode = 'auto' WHERE preferred_view_mode IS NULL;
 
 -- Index for instant querying by quiz
 CREATE INDEX IF NOT EXISTS idx_questions_quiz_id ON questions(quiz_id);

@@ -44,6 +44,24 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
 
   const optionLetters = ["A", "B", "C", "D"];
 
+  const imageSrc =
+    question.imageUrl ||
+    (question.imageBase64
+      ? `data:${question.imageMimeType || "image/jpeg"};base64,${question.imageBase64}`
+      : null);
+
+  const optionsJoined = (question.options || []).join(" ");
+  const isDiagramDependent =
+    Boolean(imageSrc) &&
+    (/\(\s*[1-4]\s*\)|figure|diagram|table\s+\d+|graph/i.test(optionsJoined) ||
+      /shown in (?:the )?(?:figure|diagram|image|table|graph)|following (?:figure|diagram|image|table|graph)|circular array/i.test(
+        question.questionText || ""
+      ));
+
+  const isPrimaryImage =
+    question.preferredViewMode === "image" ||
+    (!question.preferredViewMode && isDiagramDependent);
+
   const handleTextChange = (field: keyof Question, value: any) => {
     onUpdate({
       ...question,
@@ -120,13 +138,6 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
     }
   };
 
-  // Determine image source (from base64 or stored URL)
-  const imageSrc =
-    question.imageUrl ||
-    (question.imageBase64
-      ? `data:${question.imageMimeType || "image/jpeg"};base64,${question.imageBase64}`
-      : null);
-
   const difficultyColors = {
     Easy: "bg-emerald-50 text-emerald-800 border-emerald-300",
     Medium: "bg-amber-50 text-amber-800 border-amber-300",
@@ -162,6 +173,36 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {imageSrc && (
+            <div className="flex items-center gap-1 font-mono text-xs">
+              <span className="text-slate-500 font-bold uppercase text-[10px] hidden sm:inline">Default View:</span>
+              <button
+                type="button"
+                onClick={() => handleTextChange("preferredViewMode", "image")}
+                className={`px-2 py-0.5 font-bold border transition-colors ${
+                  isPrimaryImage
+                    ? "bg-amber-400 text-slate-900 border-slate-900 shadow-hard-xs"
+                    : "bg-white text-slate-600 border-slate-300 hover:bg-slate-100"
+                }`}
+                title="Use original screenshot as primary question view"
+              >
+                🖼️ [ IMAGE ]
+              </button>
+              <button
+                type="button"
+                onClick={() => handleTextChange("preferredViewMode", "text")}
+                className={`px-2 py-0.5 font-bold border transition-colors ${
+                  !isPrimaryImage
+                    ? "bg-slate-900 text-white border-slate-900 shadow-hard-xs"
+                    : "bg-white text-slate-600 border-slate-300 hover:bg-slate-100"
+                }`}
+                title="Use digitized text & formulas as primary question view"
+              >
+                📝 [ TEXT ]
+              </button>
+            </div>
+          )}
+
           {onRetry && (imageSrc || question.topic === "Review Needed") && (
             <button
               type="button"
@@ -192,6 +233,24 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Visual Diagram Warning Banner */}
+      {isDiagramDependent && (
+        <div className="bg-amber-50 border-b border-amber-300 px-4 py-2 text-xs font-mono text-amber-900 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="font-bold bg-amber-200 text-amber-950 px-1.5 py-0.5 border border-amber-400">
+              [ ⚠️ DIAGRAM DEPENDENT ]
+            </span>
+            <span>Contains figures or table options (e.g. 1–4). Image Mode recommended to prevent data corruption.</span>
+          </div>
+          <div className="flex items-center gap-1 font-bold">
+            <span className="text-[11px] text-amber-800 uppercase">Current:</span>
+            <span className="px-2 py-0.5 bg-amber-400 border border-slate-900 text-slate-900">
+              {isPrimaryImage ? "IMAGE MODE (ACTIVE)" : "TEXT MODE"}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Error Banner if OCR/Solve failed or on Retry failure */}
       {(retryError ||

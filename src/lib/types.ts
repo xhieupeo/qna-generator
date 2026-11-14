@@ -1,4 +1,5 @@
 export type DifficultyLevel = "Easy" | "Medium" | "Hard";
+export type ViewMode = "auto" | "image" | "text" | "split";
 
 export interface Question {
   id?: string;
@@ -15,6 +16,7 @@ export interface Question {
   explanation: string;
   topic?: string;
   difficulty?: DifficultyLevel;
+  preferredViewMode?: ViewMode; // Preference for Image vs Text display
 }
 
 export interface Quiz {

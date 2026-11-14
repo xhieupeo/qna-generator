@@ -15,6 +15,9 @@ import {
   Maximize2,
   X,
   Check,
+  Columns,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 interface QuizPlayerProps {
@@ -31,11 +34,47 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number[]>>({});
   const [isSubmitted, setIsSubmitted] = useState(false);
-  const [viewMode, setViewMode] = useState<"image" | "text">("image");
+  const [globalMode, setGlobalMode] = useState<"auto" | "image" | "text" | "split">("auto");
+  const [questionModeOverride, setQuestionModeOverride] = useState<Record<number, "image" | "text" | "split">>({});
+  const [showTranscribed, setShowTranscribed] = useState(false);
   const [showImageModal, setShowImageModal] = useState(false);
 
   const currentQ = questions[currentIndex];
   const optionLetters = ["A", "B", "C", "D"];
+
+  const imageSrc =
+    currentQ?.imageUrl ||
+    (currentQ?.imageBase64
+      ? `data:${currentQ.imageMimeType || "image/jpeg"};base64,${currentQ.imageBase64}`
+      : null);
+
+  const currentOptionsJoined = (currentQ?.options || []).join(" ");
+  const isCurrentDiagramDependent =
+    Boolean(imageSrc) &&
+    (/\(\s*[1-4]\s*\)|figure|diagram|table\s+\d+|graph/i.test(currentOptionsJoined) ||
+      /shown in (?:the )?(?:figure|diagram|image|table|graph)|following (?:figure|diagram|image|table|graph)|circular array/i.test(
+        currentQ?.questionText || ""
+      ));
+
+  const resolvedViewMode: "image" | "text" | "split" = (() => {
+    if (questionModeOverride[currentIndex]) {
+      return questionModeOverride[currentIndex];
+    }
+    if (globalMode === "image") return imageSrc ? "image" : "text";
+    if (globalMode === "text") return "text";
+    if (globalMode === "split") return imageSrc ? "split" : "text";
+
+    if (currentQ?.preferredViewMode === "image" && imageSrc) return "image";
+    if (currentQ?.preferredViewMode === "text") return "text";
+    if (currentQ?.preferredViewMode === "split" && imageSrc) return "split";
+    if (isCurrentDiagramDependent && imageSrc) return "image";
+
+    return imageSrc ? "auto" : "text";
+  })();
+
+  const isImagePrimary =
+    resolvedViewMode === "image" ||
+    (resolvedViewMode === "auto" && isCurrentDiagramDependent);
 
   const handleSelect = (optionIndex: number) => {
     if (isSubmitted) return;
@@ -96,55 +135,204 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
   const score = calculateScore();
   const percentage = Math.round((score / questions.length) * 100);
 
-  const imageSrc =
-    currentQ.imageUrl ||
-    (currentQ.imageBase64
-      ? `data:${currentQ.imageMimeType || "image/jpeg"};base64,${currentQ.imageBase64}`
-      : null);
+  const renderOptionsList = () => (
+    <div className="space-y-2.5 pt-2">
+      {currentQ.options.map((option, optIdx) => {
+        const currentSelected = selectedAnswers[currentIndex] || [];
+        const isSelected = currentSelected.includes(optIdx);
+
+        const correctIndices = getQuestionCorrectIndices(currentQ);
+        const isCorrect = correctIndices.includes(optIdx);
+
+        let rowClass = "border-slate-300 bg-white hover:bg-slate-50 text-slate-900";
+        if (isSubmitted) {
+          if (isCorrect) {
+            rowClass = "border-2 border-emerald-600 bg-emerald-50 text-emerald-950 font-medium";
+          } else if (isSelected && !isCorrect) {
+            rowClass = "border-2 border-red-600 bg-red-50 text-red-950 line-through";
+          }
+        } else if (isSelected) {
+          rowClass = "border-2 border-slate-900 bg-slate-100 text-slate-900 font-medium shadow-hard-sm";
+        }
+
+        return (
+          <button
+            key={optIdx}
+            type="button"
+            onClick={() => handleSelect(optIdx)}
+            disabled={isSubmitted}
+            className={`w-full text-left flex items-center gap-3 p-3.5 border transition-all ${rowClass}`}
+          >
+            <div
+              className={`w-7 h-7 flex items-center justify-center font-mono text-xs font-bold border transition-colors ${
+                isSelected
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white text-slate-700 border-slate-400"
+              }`}
+            >
+              {isSelected ? (
+                <Check className="w-4 h-4 stroke-[3]" />
+              ) : (
+                optionLetters[optIdx]
+              )}
+            </div>
+            <div className="flex-1 text-sm font-mono">
+              <LatexRenderer content={option} />
+            </div>
+            {isSubmitted && isCorrect && (
+              <span className="text-xs font-mono font-bold text-emerald-700 flex items-center gap-1">
+                <CheckCircle2 className="w-4 h-4" /> [ CORRECT ]
+              </span>
+            )}
+            {isSubmitted && isSelected && !isCorrect && (
+              <span className="text-xs font-mono font-bold text-red-700 flex items-center gap-1">
+                <XCircle className="w-4 h-4" /> [ WRONG ]
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const renderExplanationBox = () =>
+    isSubmitted ? (
+      <div className="mt-4 p-4 bg-slate-100 border border-slate-300">
+        <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-800 uppercase mb-1">
+          <AlertCircle className="w-4 h-4 text-blue-600" /> Solution & Explanation:
+        </div>
+        <LatexRenderer
+          content={currentQ.explanation}
+          className="text-xs text-slate-700 leading-relaxed"
+        />
+      </div>
+    ) : null;
 
   return (
-    <div className="bg-white border-2 border-slate-900 p-4 sm:p-8 shadow-hard-md max-w-4xl mx-auto">
+    <div
+      className={`bg-white border-2 border-slate-900 p-4 sm:p-8 shadow-hard-md mx-auto transition-all ${
+        resolvedViewMode === "split" ? "max-w-6xl" : "max-w-4xl"
+      }`}
+    >
       {/* Top Banner & Control */}
-      <div className="flex flex-wrap items-center justify-between border-b-2 border-slate-900 pb-4 mb-6 gap-3">
-        <div>
-          <span className="font-mono text-xs uppercase text-slate-500 font-bold block">
-            Practice Simulation Mode
-          </span>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-            {title}
-          </h2>
-        </div>
+      <div className="border-b-2 border-slate-900 pb-4 mb-6 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <span className="font-mono text-xs uppercase text-slate-500 font-bold block">
+              Practice Simulation Mode
+            </span>
+            <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+              {title}
+            </h2>
+          </div>
 
-        <div className="flex items-center gap-2">
-          {!isSubmitted ? (
+          <div className="flex items-center gap-2">
+            {!isSubmitted ? (
+              <button
+                type="button"
+                onClick={() => setIsSubmitted(true)}
+                className="px-4 py-2 bg-emerald-600 text-white font-mono text-xs font-bold uppercase border border-slate-900 hover:bg-emerald-700 shadow-hard-sm"
+              >
+                [ SUBMIT QUIZ ]
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSubmitted(false);
+                  setSelectedAnswers({});
+                  setCurrentIndex(0);
+                }}
+                className="px-4 py-2 bg-blue-600 text-white font-mono text-xs font-bold uppercase border border-slate-900 hover:bg-blue-700 shadow-hard-sm flex items-center gap-1.5"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> [ RETAKE ]
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={() => setIsSubmitted(true)}
-              className="px-4 py-2 bg-emerald-600 text-white font-mono text-xs font-bold uppercase border border-slate-900 hover:bg-emerald-700 shadow-hard-sm"
+              onClick={onExit}
+              className="px-4 py-2 bg-white text-slate-900 font-mono text-xs font-bold uppercase border border-slate-900 hover:bg-slate-100"
             >
-              [ SUBMIT QUIZ ]
+              [ EXIT ]
             </button>
-          ) : (
+          </div>
+        </div>
+
+        {/* Global Layout Switcher Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
+          <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs">
+            <span className="text-slate-500 font-bold uppercase text-[11px] mr-1">Global Mode:</span>
             <button
               type="button"
               onClick={() => {
-                setIsSubmitted(false);
-                setSelectedAnswers({});
-                setCurrentIndex(0);
+                setGlobalMode("auto");
+                setQuestionModeOverride({});
               }}
-              className="px-4 py-2 bg-blue-600 text-white font-mono text-xs font-bold uppercase border border-slate-900 hover:bg-blue-700 shadow-hard-sm flex items-center gap-1.5"
+              className={`px-2.5 py-1 font-bold border transition-colors ${
+                globalMode === "auto"
+                  ? "bg-slate-900 text-white border-slate-900 shadow-hard-xs"
+                  : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
+              }`}
+              title="Automatically choose Image mode for diagram questions and Text mode for others"
             >
-              <RotateCcw className="w-3.5 h-3.5" /> [ RETAKE ]
+              [ AUTO ]
             </button>
-          )}
+            <button
+              type="button"
+              onClick={() => {
+                setGlobalMode("image");
+                setQuestionModeOverride({});
+              }}
+              className={`px-2.5 py-1 font-bold border transition-colors flex items-center gap-1 ${
+                globalMode === "image"
+                  ? "bg-amber-400 text-slate-900 border-slate-900 shadow-hard-xs"
+                  : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
+              }`}
+              title="Always display original exam screenshot across all questions"
+            >
+              <ImageIcon className="w-3.5 h-3.5" />
+              [ 🖼️ ALL IMAGE ]
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setGlobalMode("text");
+                setQuestionModeOverride({});
+              }}
+              className={`px-2.5 py-1 font-bold border transition-colors flex items-center gap-1 ${
+                globalMode === "text"
+                  ? "bg-slate-900 text-white border-slate-900 shadow-hard-xs"
+                  : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
+              }`}
+              title="Always display digitized text and formulas across all questions"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              [ 📝 ALL TEXT ]
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setGlobalMode("split");
+                setQuestionModeOverride({});
+              }}
+              className={`hidden md:flex px-2.5 py-1 font-bold border transition-colors items-center gap-1 ${
+                globalMode === "split"
+                  ? "bg-indigo-600 text-white border-slate-900 shadow-hard-xs"
+                  : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
+              }`}
+              title="Side-by-side view on desktop: image on left, choices on right"
+            >
+              <Columns className="w-3.5 h-3.5" />
+              [ ⚡ SPLIT VIEW ]
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={onExit}
-            className="px-4 py-2 bg-white text-slate-900 font-mono text-xs font-bold uppercase border border-slate-900 hover:bg-slate-100"
-          >
-            [ EXIT ]
-          </button>
+          {isCurrentDiagramDependent && (
+            <div className="flex items-center gap-1.5 font-mono text-[11px] text-amber-800 bg-amber-50 border border-amber-300 px-2 py-0.5">
+              <span>⚠️ Visual Diagram Question</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -213,171 +401,212 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
 
       {/* Main Question Display Area */}
       <div className="space-y-4">
-        <div className="flex items-center justify-between text-xs font-mono text-slate-500">
+        {/* Question Header & Instant View Switcher */}
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono pb-2 border-b border-slate-200">
           <div className="flex items-center gap-2">
-            <span>
+            <span className="font-bold text-slate-900">
               QUESTION {currentIndex + 1} OF {questions.length}
             </span>
             {getQuestionCorrectIndices(currentQ).length > 1 && (
               <span className="text-[11px] font-mono text-blue-700 bg-blue-50 border border-blue-300 px-2 py-0.5 font-bold uppercase">
-                [ SELECT ALL THAT APPLY ({getQuestionCorrectIndices(currentQ).length} ANSWERS) ]
+                [ SELECT ALL THAT APPLY ({getQuestionCorrectIndices(currentQ).length}) ]
+              </span>
+            )}
+            {currentQ.topic && (
+              <span className="uppercase bg-slate-100 px-2 py-0.5 border border-slate-200 text-slate-600">
+                {currentQ.topic}
               </span>
             )}
           </div>
-          {currentQ.topic && (
-            <span className="uppercase bg-slate-100 px-2 py-0.5 border border-slate-200">
-              {currentQ.topic}
-            </span>
+
+          {/* Per-Question Instant View Mode Switcher */}
+          {imageSrc && (
+            <div className="flex items-center gap-1 font-mono text-xs">
+              <button
+                type="button"
+                onClick={() =>
+                  setQuestionModeOverride((prev) => ({
+                    ...prev,
+                    [currentIndex]: "image",
+                  }))
+                }
+                className={`flex items-center gap-1 px-2.5 py-1 font-bold border transition-colors ${
+                  resolvedViewMode === "image"
+                    ? "bg-amber-400 text-slate-900 border-slate-900 shadow-hard-xs"
+                    : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
+                }`}
+                title="View original exam screenshot"
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                [ IMAGE ]
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setQuestionModeOverride((prev) => ({
+                    ...prev,
+                    [currentIndex]: "text",
+                  }))
+                }
+                className={`flex items-center gap-1 px-2.5 py-1 font-bold border transition-colors ${
+                  resolvedViewMode === "text"
+                    ? "bg-slate-900 text-white border-slate-900 shadow-hard-xs"
+                    : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
+                }`}
+                title="View digitized text & formulas"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                [ TEXT ]
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setQuestionModeOverride((prev) => ({
+                    ...prev,
+                    [currentIndex]: "split",
+                  }))
+                }
+                className={`hidden md:flex items-center gap-1 px-2.5 py-1 font-bold border transition-colors ${
+                  resolvedViewMode === "split"
+                    ? "bg-indigo-600 text-white border-slate-900 shadow-hard-xs"
+                    : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
+                }`}
+                title="Side-by-side split screen"
+              >
+                <Columns className="w-3.5 h-3.5" />
+                [ SPLIT ]
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowImageModal(true)}
+                className="text-slate-600 hover:text-blue-600 p-1 border border-slate-300 bg-white ml-1"
+                title="View full-resolution image"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
           )}
         </div>
 
-        {/* View Switcher: Diagram/Image vs Digitized Text */}
-        {(imageSrc || currentQ.transcribedText) && (
-          <div className="border border-slate-300 bg-slate-50 p-2.5 space-y-2">
-            <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-200 font-mono text-xs">
-              <div className="flex items-center gap-1">
-                {imageSrc && (
-                  <button
-                    type="button"
-                    onClick={() => setViewMode("image")}
-                    className={`flex items-center gap-1 px-2.5 py-1 font-bold border transition-colors ${
-                      viewMode === "image"
-                        ? "bg-slate-900 text-white border-slate-900"
-                        : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
-                    }`}
-                  >
-                    <ImageIcon className="w-3.5 h-3.5" />
-                    [ IMAGE ]
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setViewMode("text")}
-                  className={`flex items-center gap-1 px-2.5 py-1 font-bold border transition-colors ${
-                    viewMode === "text"
-                      ? "bg-slate-900 text-white border-slate-900"
-                      : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
-                  }`}
-                >
-                  <FileText className="w-3.5 h-3.5 text-blue-500" />
-                  [ DIGITIZED TEXT / LATEX ]
-                </button>
-              </div>
-
-              {viewMode === "image" && imageSrc && (
+        {/* Dynamic Display Rendering */}
+        {resolvedViewMode === "split" && imageSrc ? (
+          /* Split View Layout (Desktop Side-by-Side) */
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start pt-2">
+            <div className="lg:sticky lg:top-4 border-2 border-slate-900 bg-slate-950 p-2 shadow-hard-sm">
+              <div className="flex items-center justify-between pb-1.5 px-1 border-b border-slate-800 text-xs font-mono text-slate-300">
+                <span className="font-bold flex items-center gap-1.5 text-amber-400">
+                  <ImageIcon className="w-3.5 h-3.5" /> [ ORIGINAL EXAM DIAGRAM ]
+                </span>
                 <button
                   type="button"
                   onClick={() => setShowImageModal(true)}
-                  className="text-xs font-mono text-blue-600 hover:underline flex items-center gap-1"
+                  className="text-xs hover:text-white flex items-center gap-1"
                 >
-                  <Maximize2 className="w-3 h-3" /> [ EXPAND ]
+                  <Maximize2 className="w-3 h-3" /> [ FULLSCREEN ]
                 </button>
-              )}
-            </div>
-
-            {viewMode === "image" && imageSrc ? (
-              <div className="max-h-80 overflow-hidden flex items-center justify-center bg-white border border-slate-200 p-1">
+              </div>
+              <div className="bg-white mt-1 p-1 max-h-[600px] overflow-auto flex items-center justify-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={imageSrc}
-                  alt={`Diagram for question ${currentIndex + 1}`}
-                  className="max-h-80 max-w-full object-contain cursor-pointer"
+                  alt={`Original exam question ${currentIndex + 1}`}
+                  className="max-w-full max-h-[560px] object-contain cursor-pointer"
                   onClick={() => setShowImageModal(true)}
                   title="Click to view full resolution"
                 />
               </div>
-            ) : (
-              <div className="bg-white border border-slate-200 p-3 max-h-80 overflow-y-auto">
-                <span className="text-[10px] font-mono uppercase text-slate-400 block mb-1">
-                  Transcribed Question & Formulas:
+            </div>
+
+            <div className="space-y-4">
+              <div className="text-base font-semibold text-slate-900 leading-relaxed border-b border-slate-200 pb-3">
+                <LatexRenderer content={currentQ.questionText} />
+              </div>
+              {renderOptionsList()}
+              {renderExplanationBox()}
+            </div>
+          </div>
+        ) : resolvedViewMode === "image" && imageSrc ? (
+          /* Image Mode Layout */
+          <div className="space-y-4 pt-1">
+            <div className="border-2 border-slate-900 bg-slate-950 p-2 shadow-hard-sm">
+              <div className="flex items-center justify-between pb-1.5 px-1 border-b border-slate-800 text-xs font-mono text-slate-300">
+                <span className="font-bold flex items-center gap-1.5 text-amber-400">
+                  <ImageIcon className="w-3.5 h-3.5" /> [ ORIGINAL EXAM SCREENSHOT ]
                 </span>
-                <LatexRenderer
-                  content={currentQ.transcribedText || currentQ.questionText}
-                  className="text-xs font-mono text-slate-900"
+                <button
+                  type="button"
+                  onClick={() => setShowImageModal(true)}
+                  className="text-xs hover:text-white flex items-center gap-1"
+                >
+                  <Maximize2 className="w-3 h-3" /> [ EXPAND / ZOOM ]
+                </button>
+              </div>
+              <div className="bg-white mt-1 p-2 max-h-[500px] overflow-auto flex items-center justify-center">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={imageSrc}
+                  alt={`Original exam question ${currentIndex + 1}`}
+                  className="max-w-full max-h-[460px] object-contain cursor-pointer"
+                  onClick={() => setShowImageModal(true)}
+                  title="Click to view full resolution"
                 />
               </div>
-            )}
-          </div>
-        )}
-
-        <div className="text-lg font-semibold text-slate-900 leading-relaxed">
-          <LatexRenderer content={currentQ.questionText} />
-        </div>
-
-        {/* Option choices */}
-        <div className="space-y-2.5 pt-2">
-          {currentQ.options.map((option, optIdx) => {
-            const currentSelected = selectedAnswers[currentIndex] || [];
-            const isSelected = currentSelected.includes(optIdx);
-
-            const correctIndices = getQuestionCorrectIndices(currentQ);
-            const isCorrect = correctIndices.includes(optIdx);
-
-            let rowClass =
-              "border-slate-300 bg-white hover:bg-slate-50 text-slate-900";
-            if (isSubmitted) {
-              if (isCorrect) {
-                rowClass =
-                  "border-2 border-emerald-600 bg-emerald-50 text-emerald-950 font-medium";
-              } else if (isSelected && !isCorrect) {
-                rowClass =
-                  "border-2 border-red-600 bg-red-50 text-red-950 line-through";
-              }
-            } else if (isSelected) {
-              rowClass =
-                "border-2 border-slate-900 bg-slate-100 text-slate-900 font-medium shadow-hard-sm";
-            }
-
-            return (
-              <button
-                key={optIdx}
-                type="button"
-                onClick={() => handleSelect(optIdx)}
-                disabled={isSubmitted}
-                className={`w-full text-left flex items-center gap-3 p-3.5 border transition-all ${rowClass}`}
-              >
-                <div
-                  className={`w-7 h-7 flex items-center justify-center font-mono text-xs font-bold border transition-colors ${
-                    isSelected
-                      ? "bg-slate-900 text-white border-slate-900"
-                      : "bg-white text-slate-700 border-slate-400"
-                  }`}
-                >
-                  {isSelected ? (
-                    <Check className="w-4 h-4 stroke-[3]" />
-                  ) : (
-                    optionLetters[optIdx]
-                  )}
-                </div>
-                <div className="flex-1 text-sm">
-                  <LatexRenderer content={option} />
-                </div>
-                {isSubmitted && isCorrect && (
-                  <span className="text-xs font-mono font-bold text-emerald-700 flex items-center gap-1">
-                    <CheckCircle2 className="w-4 h-4" /> [ CORRECT ]
-                  </span>
-                )}
-                {isSubmitted && isSelected && !isCorrect && (
-                  <span className="text-xs font-mono font-bold text-red-700 flex items-center gap-1">
-                    <XCircle className="w-4 h-4" /> [ WRONG ]
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Explanation display if submitted */}
-        {isSubmitted && (
-          <div className="mt-4 p-4 bg-slate-100 border border-slate-300">
-            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-800 uppercase mb-1">
-              <AlertCircle className="w-4 h-4 text-blue-600" /> Solution & Explanation:
             </div>
-            <LatexRenderer
-              content={currentQ.explanation}
-              className="text-xs text-slate-700 leading-relaxed"
-            />
+
+            {/* Optional Collapsible Accordion for Digitized Text */}
+            {(currentQ.transcribedText || currentQ.questionText) && (
+              <div className="border border-slate-300 bg-slate-50">
+                <button
+                  type="button"
+                  onClick={() => setShowTranscribed(!showTranscribed)}
+                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-mono font-bold text-slate-700 hover:bg-slate-100"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-blue-600" />
+                    [ {showTranscribed ? "HIDE" : "SHOW"} DIGITIZED TEXT & FORMULAS ]
+                  </span>
+                  {showTranscribed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                </button>
+                {showTranscribed && (
+                  <div className="p-3 border-t border-slate-300 bg-white">
+                    <LatexRenderer
+                      content={currentQ.transcribedText || currentQ.questionText}
+                      className="text-xs font-mono text-slate-900 leading-relaxed"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {renderOptionsList()}
+            {renderExplanationBox()}
+          </div>
+        ) : (
+          /* Text Mode Layout */
+          <div className="space-y-4 pt-1">
+            {imageSrc && (
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setQuestionModeOverride((prev) => ({
+                      ...prev,
+                      [currentIndex]: "image",
+                    }))
+                  }
+                  className="text-xs font-mono text-blue-600 hover:underline flex items-center gap-1"
+                >
+                  <ImageIcon className="w-3.5 h-3.5" /> [ Switch to Exam Screenshot View ]
+                </button>
+              </div>
+            )}
+
+            <div className="text-lg font-semibold text-slate-900 leading-relaxed">
+              <LatexRenderer content={currentQ.questionText} />
+            </div>
+
+            {renderOptionsList()}
+            {renderExplanationBox()}
           </div>
         )}
       </div>

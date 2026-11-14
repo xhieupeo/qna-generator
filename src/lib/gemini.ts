@@ -552,6 +552,14 @@ Instructions (Think-First Inverted Strategy):
     finalOptions = synthesized.options;
   }
 
+  const optionsJoined = finalOptions.join(" ");
+  const isDiagramDependent =
+    Boolean(primaryImage) &&
+    (/\(\s*[1-4]\s*\)|figure|diagram|table\s+\d+|graph/i.test(optionsJoined) ||
+      /shown in (?:the )?(?:figure|diagram|image|table|graph)|following (?:figure|diagram|image|table|graph)|circular array/i.test(
+        parsed.questionText || ""
+      ));
+
   return {
     questionNumber: unit.questionNumber || 1,
     transcribedText: parsed.transcribedText || parsed.questionText || unit.rawText || "",
@@ -564,5 +572,6 @@ Instructions (Think-First Inverted Strategy):
     explanation: parsed.explanation || "",
     topic: parsed.topic && parsed.topic !== "OCR Extracted" ? parsed.topic : "Database Systems",
     difficulty: (parsed.difficulty as any) || "Medium",
+    preferredViewMode: isDiagramDependent ? "image" : (primaryImage ? "auto" : "text"),
   };
 }

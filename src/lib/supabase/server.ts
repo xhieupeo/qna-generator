@@ -138,6 +138,7 @@ export async function saveQuestionBatch(
       explanation: q.explanation,
       topic: q.topic || "General",
       difficulty: q.difficulty || "Medium",
+      preferred_view_mode: q.preferredViewMode || "auto",
     });
   }
 
@@ -222,6 +223,7 @@ export async function saveQuizToSupabase(params: {
       explanation: q.explanation,
       topic: q.topic || "General",
       difficulty: q.difficulty || "Medium",
+      preferred_view_mode: q.preferredViewMode || "auto",
     });
   }
 
