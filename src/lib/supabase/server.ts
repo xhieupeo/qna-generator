@@ -91,6 +91,36 @@ export async function createQuizRecord(params: {
 }
 
 /**
+ * Safely inserts questions into the 'questions' table with self-healing fallback.
+ * If the remote Supabase database has not had recent migrations applied (e.g. missing
+ * 'correct_option_indices' or 'preferred_view_mode' columns in PostgREST schema cache),
+ * it gracefully strips the missing column(s) and retries the insert so saving never fails.
+ */
+async function safeInsertQuestions(supabase: any, inserts: any[]): Promise<void> {
+  let toInsert = [...inserts];
+  let { error } = await supabase.from("questions").insert(toInsert);
+
+  if (error && (error.message?.includes("schema cache") || error.code === "PGRST204")) {
+    console.warn("Supabase schema mismatch detected. Retrying with backward-compatible fields:", error.message);
+
+    // Strip new columns that might not exist in user's older Supabase table
+    toInsert = toInsert.map((item) => {
+      const copy = { ...item };
+      delete copy.correct_option_indices;
+      delete copy.preferred_view_mode;
+      return copy;
+    });
+
+    const retryResult = await supabase.from("questions").insert(toInsert);
+    error = retryResult.error;
+  }
+
+  if (error) {
+    throw new Error(`Failed to save question batch: ${error.message}`);
+  }
+}
+
+/**
  * Saves a chunk/batch of questions for an existing quiz, uploading images to Storage.
  */
 export async function saveQuestionBatch(
@@ -142,13 +172,7 @@ export async function saveQuestionBatch(
     });
   }
 
-  const { error: questionsError } = await supabase
-    .from("questions")
-    .insert(questionInserts);
-
-  if (questionsError) {
-    throw new Error(`Failed to save question batch: ${questionsError.message}`);
-  }
+  await safeInsertQuestions(supabase, questionInserts);
 
   return { count: questionInserts.length };
 }
@@ -227,13 +251,7 @@ export async function saveQuizToSupabase(params: {
     });
   }
 
-  const { error: questionsError } = await supabase
-    .from("questions")
-    .insert(questionInserts);
-
-  if (questionsError) {
-    throw new Error(`Failed to save questions: ${questionsError.message}`);
-  }
+  await safeInsertQuestions(supabase, questionInserts);
 
   return {
     id: quizId,

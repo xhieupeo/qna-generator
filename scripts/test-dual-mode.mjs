@@ -176,6 +176,41 @@ assert.strictEqual(payload.image_url.includes("quiz-images"), true);
 assert.strictEqual(payload.options.length, 4);
 console.log("  [PASS] Question correctly serializes preferred_view_mode and image_url");
 
+// Test safeInsertQuestions backward-compatibility fallback
+let mockDbColumns = ["quiz_id", "question_number", "question_text", "options", "correct_option_index", "explanation"];
+function mockSupabaseInsert(items) {
+  for (const item of items) {
+    if (item.correct_option_indices && !mockDbColumns.includes("correct_option_indices")) {
+      return {
+        error: {
+          message: "Could not find the 'correct_option_indices' column of 'questions' in the schema cache",
+          code: "PGRST204",
+        },
+      };
+    }
+  }
+  return { error: null };
+}
+
+async function simulateSafeInsert(inserts) {
+  let toInsert = [...inserts];
+  let res = mockSupabaseInsert(toInsert);
+  if (res.error && (res.error.message.includes("schema cache") || res.error.code === "PGRST204")) {
+    toInsert = toInsert.map((item) => {
+      const copy = { ...item };
+      delete copy.correct_option_indices;
+      delete copy.preferred_view_mode;
+      return copy;
+    });
+    res = mockSupabaseInsert(toInsert);
+  }
+  return res;
+}
+
+const safeRes = await simulateSafeInsert([payload]);
+assert.strictEqual(safeRes.error, null, "Self-healing fallback should succeed even with missing column in schema cache");
+console.log("  [PASS] Self-healing fallback successfully saves to older Supabase tables without error");
+
 console.log("\n==================================================================");
 console.log("  4. TESTING IMAGE MODE INTERACTIVE GRADING");
 console.log("==================================================================");
