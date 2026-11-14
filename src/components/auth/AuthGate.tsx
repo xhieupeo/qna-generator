@@ -313,7 +313,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           Sign In to Access QnA Generator
         </h1>
         <p className="text-xs text-slate-400 mt-1 font-sans">
-          This system is private and restricted strictly to <strong>{PRIMARY_ADMIN_EMAIL}</strong>.
+          Authorized access for permitted student and administrator accounts.
         </p>
       </div>
 
@@ -367,20 +367,20 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           <form onSubmit={handlePasswordLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-mono uppercase font-bold text-slate-800 mb-1">
-                Admin Email:
+                Account Email:
               </label>
               <input
                 type="email"
                 required
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
-                placeholder={PRIMARY_ADMIN_EMAIL}
+                placeholder="you@email.com"
                 className="w-full px-3 py-2 border-2 border-slate-900 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-blue-600 rounded-none bg-slate-50"
               />
             </div>
             <div>
               <label className="block text-xs font-mono uppercase font-bold text-slate-800 mb-1">
-                Master Password:
+                Password:
               </label>
               <input
                 type="password"

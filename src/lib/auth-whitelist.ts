@@ -4,14 +4,24 @@
  */
 export const PRIMARY_ADMIN_EMAIL = "xhieupeo@gmail.com";
 
+export const BUILTIN_AUTHORIZED_EMAILS = [
+  "xhieupeo@gmail.com",
+  "tanbeongaoda@gmail.com",
+];
+
 export function isEmailAuthorized(email: string | null | undefined): boolean {
   if (!email) return false;
   const clean = email.trim().toLowerCase();
 
+  // Builtin authorized emails are always accepted
+  if (BUILTIN_AUTHORIZED_EMAILS.includes(clean)) {
+    return true;
+  }
+
   const rawWhitelist =
     process.env.NEXT_PUBLIC_ALLOWED_EMAILS ||
     process.env.ALLOWED_EMAILS ||
-    PRIMARY_ADMIN_EMAIL;
+    BUILTIN_AUTHORIZED_EMAILS.join(",");
 
   const allowedList = rawWhitelist
     .split(",")
@@ -33,7 +43,7 @@ export function isEmailAuthorized(email: string | null | undefined): boolean {
     return true;
   }
 
-  // Strictly check against whitelist (which defaults to xhieupeo@gmail.com)
+  // Strictly check against whitelist
   return allowedList.includes(clean);
 }
 
@@ -41,12 +51,17 @@ export function getAllowedEmailsList(): string[] {
   const raw =
     process.env.NEXT_PUBLIC_ALLOWED_EMAILS ||
     process.env.ALLOWED_EMAILS ||
-    PRIMARY_ADMIN_EMAIL;
+    BUILTIN_AUTHORIZED_EMAILS.join(",");
 
   if (raw.trim() === "*") return ["* (All)"];
 
-  return raw
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
+  return Array.from(
+    new Set([
+      ...BUILTIN_AUTHORIZED_EMAILS,
+      ...raw
+        .split(",")
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean),
+    ])
+  );
 }
