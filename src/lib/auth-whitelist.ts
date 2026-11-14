@@ -18,8 +18,18 @@ export function isEmailAuthorized(email: string | null | undefined): boolean {
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
 
-  // If list is explicitly wildcard "*", allow all
-  if (allowedList.includes("*")) {
+  // If allow all users is explicitly enabled or list has wildcard "*"
+  if (
+    process.env.ALLOW_ALL_USERS === "true" ||
+    process.env.NEXT_PUBLIC_ALLOW_ALL_USERS === "true" ||
+    allowedList.includes("*")
+  ) {
+    return true;
+  }
+
+  // Check domain wildcards like @fpt.edu.vn or @gmail.com
+  const matchesDomain = allowedList.some((entry) => entry.startsWith("@") && clean.endsWith(entry));
+  if (matchesDomain) {
     return true;
   }
 

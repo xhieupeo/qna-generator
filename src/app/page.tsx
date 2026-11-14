@@ -5,6 +5,7 @@ import { Question, ExtractedUnit } from "@/lib/types";
 import { QuestionCard } from "@/components/studio/QuestionCard";
 import { QuizPlayer } from "@/components/quiz/QuizPlayer";
 import { exportToGift, exportToAiken, exportToCsv, exportToJson } from "@/lib/exporters";
+import { getAuthHeader } from "@/lib/supabase/client";
 import {
   UploadCloud,
   FileCode,
@@ -826,10 +827,12 @@ export default function HomePage() {
     setErrorMsg(null);
 
     try {
+      const authHeaders = await getAuthHeader();
+
       // Step 1: Create Quiz Header Record (tiny payload < 1KB to avoid Vercel 4.5MB limit)
       const initRes = await fetch("/api/quizzes", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({
           title: quizTitle,
           sourceFilename: inputMode === "url" ? fuoUrl : file?.name || "document.html",
@@ -859,7 +862,7 @@ export default function HomePage() {
 
         const chunkRes = await fetch(`/api/quizzes/${quizId}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify({ questions: chunk }),
         });
 

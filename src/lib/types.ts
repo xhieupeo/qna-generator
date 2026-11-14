@@ -24,6 +24,9 @@ export interface Quiz {
   title: string;
   sourceFilename?: string;
   totalQuestions: number;
+  userId?: string | null;
+  authorEmail?: string | null;
+  isPublic?: boolean;
   createdAt: string;
   updatedAt: string;
   questions?: Question[];
@@ -49,6 +52,8 @@ export interface ExtractedUnit {
 export interface QuizAttempt {
   id: string;
   quizId: string;
+  userId?: string | null;
+  userEmail?: string | null;
   score: number;
   total: number;
   userAnswers: Record<number, number[]>; // questionIndex -> array of selected option indices (e.g. [0] or [0, 2])

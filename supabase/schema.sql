@@ -8,9 +8,16 @@ CREATE TABLE IF NOT EXISTS quizzes (
     title TEXT NOT NULL,
     source_filename TEXT,
     total_questions INTEGER DEFAULT 0,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    author_email TEXT,
+    is_public BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Index for fast user-specific library querying
+CREATE INDEX IF NOT EXISTS idx_quizzes_user_id ON quizzes(user_id);
+CREATE INDEX IF NOT EXISTS idx_quizzes_is_public ON quizzes(is_public);
 
 -- 2. Create Questions table
 CREATE TABLE IF NOT EXISTS questions (
@@ -43,6 +50,8 @@ CREATE INDEX IF NOT EXISTS idx_questions_quiz_id ON questions(quiz_id);
 CREATE TABLE IF NOT EXISTS quiz_attempts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     quiz_id UUID NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_email TEXT,
     score INTEGER NOT NULL,
     total INTEGER NOT NULL,
     user_answers JSONB NOT NULL,
@@ -50,6 +59,27 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_quiz_attempts_quiz_id ON quiz_attempts(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_attempts_user_id ON quiz_attempts(user_id);
+
+-- ==============================================================================
+-- Migration for existing databases:
+-- ==============================================================================
+-- 1. Add user isolation & sharing columns:
+-- ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+-- ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS author_email TEXT;
+-- ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT false;
+-- CREATE INDEX IF NOT EXISTS idx_quizzes_user_id ON quizzes(user_id);
+--
+-- 2. Backfill existing unassigned quizzes to xhieupeo@gmail.com:
+-- UPDATE quizzes 
+-- SET 
+--   user_id = (SELECT id FROM auth.users WHERE email = 'xhieupeo@gmail.com' LIMIT 1),
+--   author_email = 'xhieupeo@gmail.com'
+-- WHERE user_id IS NULL;
+--
+-- 3. Quiz attempts user tracking:
+-- ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+-- ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS user_email TEXT;
 
 -- ==============================================================================
 -- Storage Bucket Instructions:

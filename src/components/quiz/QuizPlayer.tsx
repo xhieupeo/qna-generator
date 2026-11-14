@@ -467,7 +467,7 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
           </div>
 
           {/* Per-Question Instant View Mode Switcher */}
-          {imageSrc && (
+          {imageSrc ? (
             <div className="flex items-center gap-1 font-mono text-xs">
               <button
                 type="button"
@@ -532,8 +532,23 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
                 <Maximize2 className="w-3.5 h-3.5" />
               </button>
             </div>
+          ) : (
+            <div className="flex items-center gap-1 font-mono text-[11px] text-slate-500 bg-slate-100 px-2 py-0.5 border border-slate-300 font-bold">
+              <FileText className="w-3 h-3 text-slate-400" />
+              [ 📝 TEXT ONLY — NO IMAGE ]
+            </div>
           )}
         </div>
+
+        {/* Informative banner if user selected IMAGE or SPLIT view on a question without an image */}
+        {(globalMode === "image" || globalMode === "split") && !imageSrc && (
+          <div className="p-3 bg-amber-50 border border-amber-300 text-amber-900 font-mono text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+            <span>
+              [ ℹ️ NO SCREENSHOT STORED: Question {currentIndex + 1} does not have an original image in the database (e.g. legacy scan saved before image capture). Displaying digitized text version. ]
+            </span>
+          </div>
+        )}
 
         {/* Dynamic Display Rendering */}
         {resolvedViewMode === "split" && imageSrc ? (

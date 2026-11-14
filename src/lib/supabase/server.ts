@@ -79,6 +79,9 @@ export async function createQuizRecord(params: {
   title: string;
   sourceFilename?: string;
   totalQuestions: number;
+  userId?: string | null;
+  authorEmail?: string | null;
+  isPublic?: boolean;
 }): Promise<{ id: string; title: string }> {
   const supabase = getServerSupabase();
   if (!supabase) {
@@ -87,15 +90,35 @@ export async function createQuizRecord(params: {
     );
   }
 
-  const { data: quizData, error: quizError } = await supabase
+  const insertPayload: any = {
+    title: params.title || "Untitled Quiz",
+    source_filename: params.sourceFilename || "document.html",
+    total_questions: params.totalQuestions || 0,
+  };
+  if (params.userId) insertPayload.user_id = params.userId;
+  if (params.authorEmail) insertPayload.author_email = params.authorEmail;
+  if (typeof params.isPublic === "boolean") insertPayload.is_public = params.isPublic;
+
+  let { data: quizData, error: quizError } = await supabase
     .from("quizzes")
-    .insert({
-      title: params.title || "Untitled Quiz",
-      source_filename: params.sourceFilename || "document.html",
-      total_questions: params.totalQuestions || 0,
-    })
+    .insert(insertPayload)
     .select()
     .single();
+
+  if (quizError && (quizError.message?.includes("schema cache") || quizError.code === "PGRST204")) {
+    console.warn("Supabase quizzes schema mismatch, retrying without user columns:", quizError.message);
+    delete insertPayload.user_id;
+    delete insertPayload.author_email;
+    delete insertPayload.is_public;
+
+    const retry = await supabase
+      .from("quizzes")
+      .insert(insertPayload)
+      .select()
+      .single();
+    quizData = retry.data;
+    quizError = retry.error;
+  }
 
   if (quizError || !quizData) {
     throw new Error(`Failed to create quiz header: ${quizError?.message}`);
@@ -204,6 +227,9 @@ export async function saveQuizToSupabase(params: {
   title: string;
   sourceFilename?: string;
   questions: Question[];
+  userId?: string | null;
+  authorEmail?: string | null;
+  isPublic?: boolean;
 }): Promise<Quiz> {
   const supabase = getServerSupabase();
   if (!supabase) {
@@ -213,15 +239,35 @@ export async function saveQuizToSupabase(params: {
   }
 
   // 1. Insert Quiz Metadata
-  const { data: quizData, error: quizError } = await supabase
+  const insertPayload: any = {
+    title: params.title || "Untitled Quiz",
+    source_filename: params.sourceFilename || "document.html",
+    total_questions: params.questions.length,
+  };
+  if (params.userId) insertPayload.user_id = params.userId;
+  if (params.authorEmail) insertPayload.author_email = params.authorEmail;
+  if (typeof params.isPublic === "boolean") insertPayload.is_public = params.isPublic;
+
+  let { data: quizData, error: quizError } = await supabase
     .from("quizzes")
-    .insert({
-      title: params.title || "Untitled Quiz",
-      source_filename: params.sourceFilename || "document.html",
-      total_questions: params.questions.length,
-    })
+    .insert(insertPayload)
     .select()
     .single();
+
+  if (quizError && (quizError.message?.includes("schema cache") || quizError.code === "PGRST204")) {
+    console.warn("Supabase quizzes schema mismatch, retrying without user columns:", quizError.message);
+    delete insertPayload.user_id;
+    delete insertPayload.author_email;
+    delete insertPayload.is_public;
+
+    const retry = await supabase
+      .from("quizzes")
+      .insert(insertPayload)
+      .select()
+      .single();
+    quizData = retry.data;
+    quizError = retry.error;
+  }
 
   if (quizError || !quizData) {
     throw new Error(`Failed to save quiz metadata: ${quizError?.message}`);
