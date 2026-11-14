@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSupabase, saveQuizToSupabase } from "@/lib/supabase/server";
+import {
+  getServerSupabase,
+  saveQuizToSupabase,
+  createQuizRecord,
+} from "@/lib/supabase/server";
 
 export async function GET() {
   try {
@@ -29,9 +33,19 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { title, sourceFilename, questions } = body;
+    const { title, sourceFilename, questions, onlyHeader, totalQuestions } = body;
 
-    if (!questions || !Array.isArray(questions) || questions.length === 0) {
+    // Header-only initialization for progressive chunked saving
+    if (onlyHeader || !questions || !Array.isArray(questions)) {
+      const quiz = await createQuizRecord({
+        title,
+        sourceFilename,
+        totalQuestions: totalQuestions || (questions ? questions.length : 0),
+      });
+      return NextResponse.json({ quiz });
+    }
+
+    if (questions.length === 0) {
       return NextResponse.json(
         { error: "A list of questions is required." },
         { status: 400 }

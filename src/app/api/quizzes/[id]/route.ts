@@ -1,5 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSupabase } from "@/lib/supabase/server";
+import { getServerSupabase, saveQuestionBatch } from "@/lib/supabase/server";
+
+export async function POST(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const { id } = params;
+    const body = await req.json();
+    const { questions } = body;
+
+    if (!questions || !Array.isArray(questions) || questions.length === 0) {
+      return NextResponse.json(
+        { error: "No questions provided in batch" },
+        { status: 400 }
+      );
+    }
+
+    const result = await saveQuestionBatch(id, questions);
+    return NextResponse.json({ success: true, count: result.count });
+  } catch (err: any) {
+    console.error("Batch save error:", err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
 
 export async function GET(
   req: NextRequest,

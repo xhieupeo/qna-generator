@@ -132,6 +132,7 @@ export default function HomePage() {
 
   // Supabase save state
   const [isSaving, setIsSaving] = useState(false);
+  const [savingProgressMsg, setSavingProgressMsg] = useState<string | null>(null);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
   // Credential persistence preference (false = sessionStorage only, cleared on tab close)
@@ -818,30 +819,64 @@ export default function HomePage() {
   const handleSaveToSupabase = async () => {
     if (questions.length === 0) return;
     setIsSaving(true);
+    setSavingProgressMsg("Initializing quiz...");
     setSaveSuccessMsg(null);
     setErrorMsg(null);
 
     try {
-      const res = await fetch("/api/quizzes", {
+      // Step 1: Create Quiz Header Record (tiny payload < 1KB to avoid Vercel 4.5MB limit)
+      const initRes = await fetch("/api/quizzes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: quizTitle,
           sourceFilename: inputMode === "url" ? fuoUrl : file?.name || "document.html",
-          questions,
+          totalQuestions: questions.length,
+          onlyHeader: true,
         }),
       });
 
-      const data = await safeJson(res);
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to save quiz to Supabase");
+      const initData = await safeJson(initRes);
+      if (!initRes.ok) {
+        throw new Error(initData.error || "Failed to initialize quiz in Supabase");
       }
 
-      setSaveSuccessMsg(`Successfully saved "${quizTitle}" to Supabase! You can access it anytime in the Library.`);
+      const quizId = initData.quiz?.id;
+      if (!quizId) {
+        throw new Error("Did not receive a valid Quiz ID from Supabase.");
+      }
+
+      // Step 2: Save Questions in Chunks of 4 (keeps each request payload ~600KB - 1MB)
+      const CHUNK_SIZE = 4;
+      const total = questions.length;
+      for (let i = 0; i < total; i += CHUNK_SIZE) {
+        const chunk = questions.slice(i, i + CHUNK_SIZE);
+        const start = i + 1;
+        const end = Math.min(i + CHUNK_SIZE, total);
+        setSavingProgressMsg(`Saving questions ${start}-${end} of ${total}...`);
+
+        const chunkRes = await fetch(`/api/quizzes/${quizId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ questions: chunk }),
+        });
+
+        const chunkData = await safeJson(chunkRes);
+        if (!chunkRes.ok) {
+          throw new Error(
+            chunkData.error || `Failed to save questions ${start}-${end} to Supabase`
+          );
+        }
+      }
+
+      setSaveSuccessMsg(
+        `Successfully saved "${quizTitle}" (${questions.length} questions) to Supabase! You can access it anytime in the Library.`
+      );
     } catch (err: any) {
       setErrorMsg(`Supabase save error: ${err.message}`);
     } finally {
       setIsSaving(false);
+      setSavingProgressMsg(null);
     }
   };
 
@@ -1521,7 +1556,7 @@ export default function HomePage() {
                 className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white font-mono text-xs font-bold uppercase border border-slate-900 hover:bg-blue-700 disabled:opacity-50 shadow-hard-sm"
               >
                 <Database className="w-3.5 h-3.5" />
-                {isSaving ? "[ SAVING... ]" : "[ SAVE TO SUPABASE ]"}
+                {savingProgressMsg ? `[ ${savingProgressMsg.toUpperCase()} ]` : isSaving ? "[ SAVING... ]" : "[ SAVE TO SUPABASE ]"}
               </button>
 
               <div className="relative group">
