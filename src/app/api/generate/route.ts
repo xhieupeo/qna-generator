@@ -302,6 +302,7 @@ export async function POST(req: NextRequest) {
           imageMimeType: unit.images[0]?.mimeType || null,
           options: ["Option A", "Option B", "Option C", "Option D"],
           correctOptionIndex: 0,
+          correctOptionIndices: [0],
           explanation: `Failed to auto-generate answer via ${engineLabel}: ${genErr?.message || "Unknown error"}. You can manually edit this question or click [ RETRY OCR / SOLVE ].`,
           difficulty: "Medium",
           topic: "Review Needed",

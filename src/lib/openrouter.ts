@@ -1,5 +1,9 @@
 import { ExtractedUnit, Question } from "./types";
-import { extractJsonFromResponse } from "./gemini";
+import {
+  extractJsonFromResponse,
+  areOptionsDummy,
+  synthesizeOptionsFromExplanation,
+} from "./gemini";
 
 export interface GenerateOpenRouterOptions {
   apiKey: string;
@@ -93,6 +97,10 @@ Instructions (Think-First Inverted Strategy):
    - Solve the problem faithfully within the context of the course subject.
    - If the input is True/False, preserve the True/False options and select the correct option index accurately.
    - Formulate distinct options (realistic distractors based on common student misconceptions or subtle syntax errors).
+   - CRITICAL REQUIREMENT FOR OPTIONS:
+     * You MUST ALWAYS provide 4 complete, concrete, descriptive answer choices based on the question subject.
+     * NEVER output generic placeholder strings like "Option A", "Option B", "Option C", or "Option D".
+     * If the screenshot does not display explicit multiple-choice options (e.g. if options were cut off or if it is an open-ended question stem), you MUST synthesize 4 realistic, domain-specific options: 1 strictly correct answer and 3 plausible, realistic distractors directly related to the question.
    - If the question allows multiple answers (e.g. "select all that apply" or multiple true statements), include all correct 0-based indices in "correctOptionIndices". For single-answer questions, include only the one correct index in "correctOptionIndices".
    - NEVER invent an unrelated question from another academic subject.
 3. **JSON Output Format**:
@@ -100,7 +108,12 @@ Instructions (Think-First Inverted Strategy):
    {
      "transcribedText": "Full verbatim OCR transcription with LaTeX equations and code blocks",
      "questionText": "The complete question prompt or problem statement",
-     "options": ["Option A", "Option B", "Option C", "Option D"],
+     "options": [
+       "Locks are concurrency control mechanisms ensuring ACID isolation",
+       "Cursors disable row-by-row query processing and force table locking",
+       "Stored procedures and functions are strictly non-executable in production",
+       "Database views duplicate physical tables and cannot reference base relations"
+     ],
      "correctOptionIndex": 0,
      "correctOptionIndices": [0],
      "explanation": "Detailed step-by-step pedagogical explanation of the correct solution",
@@ -211,19 +224,38 @@ Instructions (Think-First Inverted Strategy):
     correctIndices = [primaryCorrectIndex];
   }
 
+  let finalOptions =
+    Array.isArray(parsed.options) && parsed.options.length >= 2
+      ? parsed.options.map((opt: any) => String(opt || "").trim())
+      : [];
+
+  if (areOptionsDummy(finalOptions)) {
+    const fullText = (parsed.transcribedText || "") + "\n" + (parsed.questionText || "");
+    const choiceMatches = [...fullText.matchAll(/(?:^|\n)\s*([A-D])[\.\:\)]\s*([^\n]+)/g)];
+    if (choiceMatches.length >= 2) {
+      finalOptions = choiceMatches.map((m) => m[2].trim());
+    }
+  }
+
+  if (areOptionsDummy(finalOptions)) {
+    const synthesized = synthesizeOptionsFromExplanation(
+      parsed.questionText || "Question",
+      parsed.explanation || ""
+    );
+    finalOptions = synthesized.options;
+  }
+
   return {
     questionNumber: unit.questionNumber || 1,
     transcribedText: parsed.transcribedText || parsed.questionText || unit.rawText || "",
     questionText: parsed.questionText || unit.rawText || "Question extracted from image",
     imageBase64: primaryImage ? primaryImage.base64Data : null,
     imageMimeType: primaryImage ? primaryImage.mimeType : null,
-    options: Array.isArray(parsed.options) && parsed.options.length > 0
-      ? parsed.options
-      : ["Option A", "Option B", "Option C", "Option D"],
+    options: finalOptions,
     correctOptionIndex: correctIndices[0] ?? primaryCorrectIndex,
     correctOptionIndices: correctIndices,
     explanation: parsed.explanation || "",
-    topic: parsed.topic || "General",
+    topic: parsed.topic && parsed.topic !== "OCR Extracted" ? parsed.topic : "Database Systems",
     difficulty: (parsed.difficulty as any) || "Medium",
   };
 }
