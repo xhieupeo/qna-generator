@@ -207,23 +207,6 @@ Instructions (Think-First Inverted Strategy):
   const rawText = data?.choices?.[0]?.message?.content || "";
   const parsed = extractJsonFromResponse(rawText);
 
-  const primaryCorrectIndex =
-    typeof parsed.correctOptionIndex === "number" &&
-    parsed.correctOptionIndex >= 0 &&
-    parsed.correctOptionIndex < 4
-      ? parsed.correctOptionIndex
-      : 0;
-
-  let correctIndices: number[] = [];
-  if (Array.isArray(parsed.correctOptionIndices) && parsed.correctOptionIndices.length > 0) {
-    correctIndices = parsed.correctOptionIndices
-      .filter((idx: any) => typeof idx === "number" && idx >= 0 && idx < 4)
-      .sort((a: number, b: number) => a - b);
-  }
-  if (correctIndices.length === 0) {
-    correctIndices = [primaryCorrectIndex];
-  }
-
   let finalOptions =
     Array.isArray(parsed.options) && parsed.options.length >= 2
       ? parsed.options.map((opt: any) => String(opt || "").trim())
@@ -231,7 +214,7 @@ Instructions (Think-First Inverted Strategy):
 
   if (areOptionsDummy(finalOptions)) {
     const fullText = (parsed.transcribedText || "") + "\n" + (parsed.questionText || "");
-    const choiceMatches = [...fullText.matchAll(/(?:^|\n)\s*([A-D])[\.\:\)]\s*([^\n]+)/g)];
+    const choiceMatches = [...fullText.matchAll(/(?:^|\n)\s*([A-F])[\.\:\)]\s*([^\n]+)/g)];
     if (choiceMatches.length >= 2) {
       finalOptions = choiceMatches.map((m) => m[2].trim());
     }
@@ -243,6 +226,25 @@ Instructions (Think-First Inverted Strategy):
       parsed.explanation || ""
     );
     finalOptions = synthesized.options;
+  }
+
+  const maxOptionsCount = Math.max(finalOptions.length, 6);
+
+  const primaryCorrectIndex =
+    typeof parsed.correctOptionIndex === "number" &&
+    parsed.correctOptionIndex >= 0 &&
+    parsed.correctOptionIndex < maxOptionsCount
+      ? parsed.correctOptionIndex
+      : 0;
+
+  let correctIndices: number[] = [];
+  if (Array.isArray(parsed.correctOptionIndices) && parsed.correctOptionIndices.length > 0) {
+    correctIndices = parsed.correctOptionIndices
+      .filter((idx: any) => typeof idx === "number" && idx >= 0 && idx < maxOptionsCount)
+      .sort((a: number, b: number) => a - b);
+  }
+  if (correctIndices.length === 0) {
+    correctIndices = [primaryCorrectIndex];
   }
 
   const optionsJoined = finalOptions.join(" ");

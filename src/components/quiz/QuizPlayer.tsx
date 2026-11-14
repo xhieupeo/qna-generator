@@ -42,7 +42,9 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
   const [imageLoading, setImageLoading] = useState(false);
 
   const currentQ = questions[currentIndex];
-  const optionLetters = ["A", "B", "C", "D"];
+  const optionLetters = ["A", "B", "C", "D", "E", "F", "G", "H"];
+  const getOptionLetter = (idx: number) =>
+    idx < optionLetters.length ? optionLetters[idx] : String.fromCharCode(65 + idx);
 
   const imageSrc =
     currentQ?.imageUrl ||
@@ -140,17 +142,51 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
   const getQuestionCorrectIndices = (q: Question): number[] => {
     // 1. Explanation Cross-Validation (Self-healing for questions where fallback defaulted to 0):
     // If the explanation explicitly concludes with "corresponds to option D", "correct answer is D", etc.,
-    // align with the mathematical proof in the explanation.
+    // or mathematically proves an option in its conclusion, align with the proof.
     if (q.explanation) {
+      // 1A. Explicit letter match (A through F)
       const explicitMatch = q.explanation.match(
-        /(?:corresponds to option|correct answer is|correct option is|the answer is|choice)\s+([A-D])\b/i
+        /(?:corresponds to option|correct answer is|correct option is|the answer is|choice|option)\s+([A-F])\b/i
       );
       if (explicitMatch) {
         const letter = explicitMatch[1].toUpperCase();
-        const letterIdx = { A: 0, B: 1, C: 2, D: 3 }[letter];
+        const letterIdx = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5 }[letter];
         const stored = q.correctOptionIndex ?? 0;
         if (typeof letterIdx === "number" && stored === 0 && letterIdx !== 0) {
           return [letterIdx];
+        }
+      }
+
+      // 1B. Semantic conclusion match: if explanation proves a specific option (e.g. fun(-1012)),
+      // align with the mathematical conclusion rather than an accidental default to 0.
+      if (Array.isArray(q.options) && q.options.length > 0) {
+        const stored = q.correctOptionIndex ?? 0;
+        const currentIndices =
+          Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0
+            ? q.correctOptionIndices
+            : [stored];
+
+        if (currentIndices.length === 1 && currentIndices[0] === 0) {
+          const expl = q.explanation;
+          const conclusion = expl.length > 400 ? expl.slice(-400) : expl;
+          const clean = (s: string) => s.toLowerCase().replace(/[\s\(\)\;`'"]/g, "");
+          const cleanConclusion = clean(conclusion);
+
+          const matches: number[] = [];
+          q.options.forEach((opt, idx) => {
+            const cleanOpt = clean(opt);
+            if (cleanOpt.length >= 3 && cleanConclusion.includes(cleanOpt)) {
+              matches.push(idx);
+            }
+          });
+
+          if (matches.length > 0) {
+            matches.sort((a, b) => q.options[b].length - q.options[a].length);
+            const bestMatch = matches[0];
+            if (bestMatch !== 0) {
+              return [bestMatch];
+            }
+          }
         }
       }
     }
@@ -220,7 +256,7 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
               {isSelected ? (
                 <Check className="w-4 h-4 stroke-[3]" />
               ) : (
-                optionLetters[optIdx]
+                getOptionLetter(optIdx)
               )}
             </div>
             <div className="flex-1 text-sm font-mono">

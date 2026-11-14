@@ -105,29 +105,67 @@ export function synthesizeOptionsFromExplanation(
 
 /**
  * Cross-validates and auto-aligns correctOptionIndex with explicit mathematical conclusions
- * stated in the explanation (e.g. "Thus ... which corresponds to option D").
+ * stated in the explanation (e.g. "Thus ... which corresponds to option D" or "making fun(-1012) the correct call").
  */
 export function crossValidateAnswerWithExplanation(parsed: any): any {
   if (!parsed || typeof parsed !== "object") return parsed;
 
   const expl = parsed.explanation || "";
+  const rawOptions: string[] = Array.isArray(parsed.options)
+    ? parsed.options.map((opt: any) => String(opt || "").trim())
+    : [];
+
+  let matchedIndex: number | null = null;
+
   if (expl) {
+    // 1. Explicit letter match (A through F)
     const explicitMatch = expl.match(
-      /(?:corresponds to option|correct answer is|correct option is|the answer is|choice)\s+([A-D])\b/i
+      /(?:corresponds to option|correct answer is|correct option is|the answer is|choice|option)\s+([A-F])\b/i
     );
     if (explicitMatch) {
       const letter = explicitMatch[1].toUpperCase();
-      const letterIdx = { A: 0, B: 1, C: 2, D: 3 }[letter];
-      if (typeof letterIdx === "number") {
-        const currentIdx = typeof parsed.correctOptionIndex === "number" ? parsed.correctOptionIndex : 0;
-        if (
-          currentIdx !== letterIdx &&
-          (currentIdx === 0 || !parsed.correctOptionIndices || parsed.correctOptionIndices.length <= 1)
-        ) {
-          parsed.correctOptionIndex = letterIdx;
-          parsed.correctOptionIndices = [letterIdx];
-        }
+      const letterIdx = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5 }[letter];
+      if (typeof letterIdx === "number" && (rawOptions.length === 0 || letterIdx < rawOptions.length)) {
+        matchedIndex = letterIdx;
       }
+    }
+
+    // 2. Semantic option content match
+    // If no explicit letter was found, check if the concluding sentence or proof in the explanation
+    // explicitly specifies one of the options (e.g. "fun(-1012)", or mathematical formulas).
+    if (matchedIndex === null && rawOptions.length > 0) {
+      // Look especially at the concluding portion (last 400 chars) of the explanation
+      const conclusionPortion = expl.length > 400 ? expl.slice(-400) : expl;
+      
+      const cleanText = (t: string) => t.toLowerCase().replace(/[\s\(\)\;`'"]/g, "");
+      const cleanedConclusion = cleanText(conclusionPortion);
+
+      const candidateMatches: number[] = [];
+      rawOptions.forEach((opt, idx) => {
+        const cleanedOpt = cleanText(opt);
+        if (cleanedOpt.length >= 3 && cleanedConclusion.includes(cleanedOpt)) {
+          candidateMatches.push(idx);
+        }
+      });
+
+      if (candidateMatches.length === 1) {
+        matchedIndex = candidateMatches[0];
+      } else if (candidateMatches.length > 1) {
+        // If multiple options match (e.g. 1012 and -1012), pick the longest/most specific match
+        candidateMatches.sort((a, b) => rawOptions[b].length - rawOptions[a].length);
+        matchedIndex = candidateMatches[0];
+      }
+    }
+  }
+
+  if (typeof matchedIndex === "number") {
+    const currentIdx = typeof parsed.correctOptionIndex === "number" ? parsed.correctOptionIndex : 0;
+    if (
+      currentIdx !== matchedIndex &&
+      (currentIdx === 0 || !parsed.correctOptionIndices || parsed.correctOptionIndices.length <= 1)
+    ) {
+      parsed.correctOptionIndex = matchedIndex;
+      parsed.correctOptionIndices = [matchedIndex];
     }
   }
 
@@ -451,12 +489,12 @@ Instructions (Think-First Inverted Strategy):
             },
             options: {
               type: SchemaType.ARRAY,
-              description: "Distinct multiple choice options (A, B, C, D).",
+              description: "Distinct multiple choice options (A, B, C, D, E, etc.).",
               items: { type: SchemaType.STRING },
             },
             correctOptionIndex: {
               type: SchemaType.INTEGER,
-              description: "Index of the primary correct option (0 for A, 1 for B, 2 for C, 3 for D).",
+              description: "Index of the primary correct option (0 for A, 1 for B, 2 for C, 3 for D, 4 for E, etc.).",
             },
             correctOptionIndices: {
               type: SchemaType.ARRAY,
@@ -514,23 +552,6 @@ Instructions (Think-First Inverted Strategy):
 
   const parsed = extractJsonFromResponse(textResponse);
 
-  const primaryCorrectIndex =
-    typeof parsed.correctOptionIndex === "number" &&
-    parsed.correctOptionIndex >= 0 &&
-    parsed.correctOptionIndex < 4
-      ? parsed.correctOptionIndex
-      : 0;
-
-  let correctIndices: number[] = [];
-  if (Array.isArray(parsed.correctOptionIndices) && parsed.correctOptionIndices.length > 0) {
-    correctIndices = parsed.correctOptionIndices
-      .filter((idx: any) => typeof idx === "number" && idx >= 0 && idx < 4)
-      .sort((a: number, b: number) => a - b);
-  }
-  if (correctIndices.length === 0) {
-    correctIndices = [primaryCorrectIndex];
-  }
-
   let finalOptions =
     Array.isArray(parsed.options) && parsed.options.length >= 2
       ? parsed.options.map((opt: any) => String(opt || "").trim())
@@ -538,7 +559,7 @@ Instructions (Think-First Inverted Strategy):
 
   if (areOptionsDummy(finalOptions)) {
     const fullText = (parsed.transcribedText || "") + "\n" + (parsed.questionText || "");
-    const choiceMatches = [...fullText.matchAll(/(?:^|\n)\s*([A-D])[\.\:\)]\s*([^\n]+)/g)];
+    const choiceMatches = [...fullText.matchAll(/(?:^|\n)\s*([A-F])[\.\:\)]\s*([^\n]+)/g)];
     if (choiceMatches.length >= 2) {
       finalOptions = choiceMatches.map((m) => m[2].trim());
     }
@@ -550,6 +571,25 @@ Instructions (Think-First Inverted Strategy):
       parsed.explanation || ""
     );
     finalOptions = synthesized.options;
+  }
+
+  const maxOptionsCount = Math.max(finalOptions.length, 6);
+
+  const primaryCorrectIndex =
+    typeof parsed.correctOptionIndex === "number" &&
+    parsed.correctOptionIndex >= 0 &&
+    parsed.correctOptionIndex < maxOptionsCount
+      ? parsed.correctOptionIndex
+      : 0;
+
+  let correctIndices: number[] = [];
+  if (Array.isArray(parsed.correctOptionIndices) && parsed.correctOptionIndices.length > 0) {
+    correctIndices = parsed.correctOptionIndices
+      .filter((idx: any) => typeof idx === "number" && idx >= 0 && idx < maxOptionsCount)
+      .sort((a: number, b: number) => a - b);
+  }
+  if (correctIndices.length === 0) {
+    correctIndices = [primaryCorrectIndex];
   }
 
   const optionsJoined = finalOptions.join(" ");
