@@ -104,6 +104,47 @@ export function synthesizeOptionsFromExplanation(
 }
 
 /**
+ * Cross-validates and auto-aligns correctOptionIndex with explicit mathematical conclusions
+ * stated in the explanation (e.g. "Thus ... which corresponds to option D").
+ */
+export function crossValidateAnswerWithExplanation(parsed: any): any {
+  if (!parsed || typeof parsed !== "object") return parsed;
+
+  const expl = parsed.explanation || "";
+  if (expl) {
+    const explicitMatch = expl.match(
+      /(?:corresponds to option|correct answer is|correct option is|the answer is|choice)\s+([A-D])\b/i
+    );
+    if (explicitMatch) {
+      const letter = explicitMatch[1].toUpperCase();
+      const letterIdx = { A: 0, B: 1, C: 2, D: 3 }[letter];
+      if (typeof letterIdx === "number") {
+        const currentIdx = typeof parsed.correctOptionIndex === "number" ? parsed.correctOptionIndex : 0;
+        if (
+          currentIdx !== letterIdx &&
+          (currentIdx === 0 || !parsed.correctOptionIndices || parsed.correctOptionIndices.length <= 1)
+        ) {
+          parsed.correctOptionIndex = letterIdx;
+          parsed.correctOptionIndices = [letterIdx];
+        }
+      }
+    }
+  }
+
+  if (
+    !parsed.correctOptionIndices ||
+    !Array.isArray(parsed.correctOptionIndices) ||
+    parsed.correctOptionIndices.length === 0
+  ) {
+    parsed.correctOptionIndices = [
+      typeof parsed.correctOptionIndex === "number" ? parsed.correctOptionIndex : 0,
+    ];
+  }
+
+  return parsed;
+}
+
+/**
  * Normalizes and repairs common LLM JSON syntax errors:
  * - Strips code fence wrappers
  * - Extracts outermost { ... }
@@ -141,7 +182,7 @@ export function extractJsonFromResponse(raw: string): any {
     assertNoDegenerativeRepetition(parsed?.transcribedText || "");
     assertNoDegenerativeRepetition(parsed?.questionText || "");
     assertNoDegenerativeRepetition(parsed?.explanation || "");
-    return parsed;
+    return crossValidateAnswerWithExplanation(parsed);
   } catch (directErr: any) {
     if (directErr?.message?.includes("Degenerative") || directErr?.message?.includes("gibberish")) {
       throw directErr;
@@ -154,7 +195,7 @@ export function extractJsonFromResponse(raw: string): any {
       assertNoDegenerativeRepetition(parsed?.transcribedText || "");
       assertNoDegenerativeRepetition(parsed?.questionText || "");
       assertNoDegenerativeRepetition(parsed?.explanation || "");
-      return parsed;
+      return crossValidateAnswerWithExplanation(parsed);
     } catch {
       // Continue to regex recovery
     }
@@ -244,7 +285,7 @@ export function extractJsonFromResponse(raw: string): any {
       const topicMatch = cleaned.match(/"topic"\s*:\s*"([\s\S]*?)(?<!\\)"/);
       const difficultyMatch = cleaned.match(/"difficulty"\s*:\s*"([\s\S]*?)(?<!\\)"/);
 
-      return {
+      return crossValidateAnswerWithExplanation({
         transcribedText: transcribedText || questionText,
         questionText: questionText || transcribedText.slice(0, 300),
         options: recoveredOptions,
@@ -253,7 +294,7 @@ export function extractJsonFromResponse(raw: string): any {
         explanation,
         topic: topicMatch ? topicMatch[1] : "Database Systems",
         difficulty: difficultyMatch ? difficultyMatch[1] : "Medium",
-      };
+      });
     }
 
     // Reject broken/truncated JSON envelopes instead of dumping malformed JSON to UI
