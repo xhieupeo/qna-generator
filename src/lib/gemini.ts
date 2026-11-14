@@ -226,6 +226,21 @@ export function extractJsonFromResponse(raw: string): any {
         }
       }
 
+      // E. Explanation Cross-Validation / Sanity Check:
+      // If the model's explanation explicitly concludes e.g. "which corresponds to option D" or "correct option is D",
+      // auto-align the correct index to avoid contradiction between explanation and judge system.
+      const explicitLetterMatch = explanation.match(
+        /(?:corresponds to option|correct answer is|correct option is|the answer is|choice)\s+([A-D])\b/i
+      );
+      if (explicitLetterMatch) {
+        const letter = explicitLetterMatch[1].toUpperCase();
+        const letterIdx = { A: 0, B: 1, C: 2, D: 3 }[letter];
+        if (typeof letterIdx === "number" && (!singleIndexMatch || recoveredCorrectIndex === 0)) {
+          recoveredCorrectIndex = letterIdx;
+          recoveredCorrectIndices = [letterIdx];
+        }
+      }
+
       const topicMatch = cleaned.match(/"topic"\s*:\s*"([\s\S]*?)(?<!\\)"/);
       const difficultyMatch = cleaned.match(/"difficulty"\s*:\s*"([\s\S]*?)(?<!\\)"/);
 

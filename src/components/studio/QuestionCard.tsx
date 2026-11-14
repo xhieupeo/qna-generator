@@ -57,12 +57,30 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
     handleTextChange("options", newOptions);
   };
 
-  const currentCorrectIndices =
-    Array.isArray(question.correctOptionIndices) && question.correctOptionIndices.length > 0
-      ? question.correctOptionIndices
-      : typeof question.correctOptionIndex === "number"
-      ? [question.correctOptionIndex]
-      : [0];
+  const getInitialCorrectIndices = (): number[] => {
+    if (question.explanation) {
+      const explicitMatch = question.explanation.match(
+        /(?:corresponds to option|correct answer is|correct option is|the answer is|choice)\s+([A-D])\b/i
+      );
+      if (explicitMatch) {
+        const letter = explicitMatch[1].toUpperCase();
+        const letterIdx = { A: 0, B: 1, C: 2, D: 3 }[letter];
+        const stored = question.correctOptionIndex ?? 0;
+        if (typeof letterIdx === "number" && stored === 0 && letterIdx !== 0) {
+          return [letterIdx];
+        }
+      }
+    }
+    if (Array.isArray(question.correctOptionIndices) && question.correctOptionIndices.length > 0) {
+      return question.correctOptionIndices;
+    }
+    if (typeof question.correctOptionIndex === "number") {
+      return [question.correctOptionIndex];
+    }
+    return [0];
+  };
+
+  const currentCorrectIndices = getInitialCorrectIndices();
 
   const handleToggleCorrectOption = (optIdx: number) => {
     let next: number[];

@@ -52,6 +52,23 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
   };
 
   const getQuestionCorrectIndices = (q: Question): number[] => {
+    // 1. Explanation Cross-Validation (Self-healing for questions where fallback defaulted to 0):
+    // If the explanation explicitly concludes with "corresponds to option D", "correct answer is D", etc.,
+    // align with the mathematical proof in the explanation.
+    if (q.explanation) {
+      const explicitMatch = q.explanation.match(
+        /(?:corresponds to option|correct answer is|correct option is|the answer is|choice)\s+([A-D])\b/i
+      );
+      if (explicitMatch) {
+        const letter = explicitMatch[1].toUpperCase();
+        const letterIdx = { A: 0, B: 1, C: 2, D: 3 }[letter];
+        const stored = q.correctOptionIndex ?? 0;
+        if (typeof letterIdx === "number" && stored === 0 && letterIdx !== 0) {
+          return [letterIdx];
+        }
+      }
+    }
+
     if (Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0) {
       return q.correctOptionIndices;
     }
