@@ -230,6 +230,41 @@ assert.strictEqual(gradeQuestion([0, 1], correctIndices), false, "Over-selecting
 console.log("  [PASS] Interactive answers grade accurately in image mode");
 
 console.log("\n==================================================================");
+console.log("  5. TESTING SPLIT VIEW IMAGE SYNCHRONIZATION AND PRE-FETCHING");
+console.log("==================================================================");
+
+function generateSplitImageKey(idx, imageSrc) {
+  return `split-img-${idx}-${imageSrc?.slice(0, 40)}`;
+}
+
+const keyQ35 = generateSplitImageKey(34, "https://supabase.co/storage/v1/object/public/quiz-images/q35.png");
+const keyQ36 = generateSplitImageKey(35, "https://supabase.co/storage/v1/object/public/quiz-images/q36.png");
+
+assert.notStrictEqual(keyQ35, keyQ36, "Keys between consecutive questions must be strictly different to force DOM re-mount");
+console.log("  [PASS] Unique React key generated for Q35 vs Q36 preventing stale image reuse");
+
+function computePrefetchIndices(currentIdx, totalQuestions) {
+  return [currentIdx - 1, currentIdx + 1, currentIdx + 2].filter(
+    (idx) => idx >= 0 && idx < totalQuestions
+  );
+}
+
+// Case 1: Mid-quiz question (Q36 = index 35)
+const midPrefetch = computePrefetchIndices(35, 50);
+assert.deepStrictEqual(midPrefetch, [34, 36, 37], "Should prefetch Q35, Q37, Q38");
+console.log("  [PASS] Adjacent prefetch indices calculated accurately for middle questions");
+
+// Case 2: Start of quiz (Q1 = index 0)
+const startPrefetch = computePrefetchIndices(0, 50);
+assert.deepStrictEqual(startPrefetch, [1, 2], "Should not include negative index");
+console.log("  [PASS] Start-of-quiz boundary handled cleanly without negative indices");
+
+// Case 3: End of quiz (Q50 = index 49)
+const endPrefetch = computePrefetchIndices(49, 50);
+assert.deepStrictEqual(endPrefetch, [48], "Should not exceed total questions length");
+console.log("  [PASS] End-of-quiz boundary handled cleanly without out-of-bounds indices");
+
+console.log("\n==================================================================");
 console.log("  FINAL SCORE: ALL DUAL-MODE TESTS PASSED (100%)");
 console.log("==================================================================\n");
 

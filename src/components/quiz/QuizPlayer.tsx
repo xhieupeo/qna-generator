@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Question } from "@/lib/types";
 import { LatexRenderer } from "@/components/common/LatexRenderer";
 import {
@@ -18,6 +18,7 @@ import {
   Columns,
   ChevronDown,
   ChevronUp,
+  Loader2,
 } from "lucide-react";
 
 interface QuizPlayerProps {
@@ -38,6 +39,7 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
   const [questionModeOverride, setQuestionModeOverride] = useState<Record<number, "image" | "text" | "split">>({});
   const [showTranscribed, setShowTranscribed] = useState(false);
   const [showImageModal, setShowImageModal] = useState(false);
+  const [imageLoading, setImageLoading] = useState(false);
 
   const currentQ = questions[currentIndex];
   const optionLetters = ["A", "B", "C", "D"];
@@ -75,6 +77,51 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
   const isImagePrimary =
     resolvedViewMode === "image" ||
     (resolvedViewMode === "auto" && isCurrentDiagramDependent);
+
+  // 1. Immediately signal image loading when moving between questions
+  useEffect(() => {
+    if (imageSrc) {
+      setImageLoading(true);
+    }
+  }, [currentIndex, imageSrc]);
+
+  // 2. Pre-fetch adjacent question images (N-1, N+1, N+2) in memory for zero-lag navigation
+  useEffect(() => {
+    const indicesToPrefetch = [currentIndex - 1, currentIndex + 1, currentIndex + 2];
+    indicesToPrefetch.forEach((idx) => {
+      if (idx >= 0 && idx < questions.length) {
+        const q = questions[idx];
+        const src =
+          q?.imageUrl ||
+          (q?.imageBase64
+            ? `data:${q.imageMimeType || "image/jpeg"};base64,${q.imageBase64}`
+            : null);
+        if (src && typeof window !== "undefined") {
+          const img = new window.Image();
+          img.src = src;
+        }
+      }
+    });
+  }, [currentIndex, questions]);
+
+  // 3. Arrow key shortcuts (Left = Previous, Right = Next)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA"
+      ) {
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        setCurrentIndex((prev) => Math.max(0, prev - 1));
+      } else if (e.key === "ArrowRight") {
+        setCurrentIndex((prev) => Math.min(questions.length - 1, prev + 1));
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [questions.length]);
 
   const handleSelect = (optionIndex: number) => {
     if (isSubmitted) return;
@@ -495,7 +542,7 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
             <div className="lg:sticky lg:top-4 border-2 border-slate-900 bg-slate-950 p-2 shadow-hard-sm">
               <div className="flex items-center justify-between pb-1.5 px-1 border-b border-slate-800 text-xs font-mono text-slate-300">
                 <span className="font-bold flex items-center gap-1.5 text-amber-400">
-                  <ImageIcon className="w-3.5 h-3.5" /> [ ORIGINAL EXAM DIAGRAM ]
+                  <ImageIcon className="w-3.5 h-3.5" /> [ ORIGINAL EXAM DIAGRAM (Q{currentIndex + 1}) ]
                 </span>
                 <button
                   type="button"
@@ -505,12 +552,24 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
                   <Maximize2 className="w-3 h-3" /> [ FULLSCREEN ]
                 </button>
               </div>
-              <div className="bg-white mt-1 p-1 max-h-[600px] overflow-auto flex items-center justify-center">
+              <div
+                key={`split-img-box-${currentIndex}`}
+                className="bg-white mt-1 p-1 max-h-[600px] min-h-[260px] overflow-auto flex items-center justify-center relative"
+              >
+                {imageLoading && (
+                  <div className="absolute inset-0 bg-slate-100 flex items-center justify-center font-mono text-xs text-slate-600 z-10 gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-900" />
+                    <span>[ LOADING DIAGRAM {currentIndex + 1}... ]</span>
+                  </div>
+                )}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
+                  key={`split-img-${currentIndex}-${imageSrc?.slice(0, 40)}`}
                   src={imageSrc}
                   alt={`Original exam question ${currentIndex + 1}`}
-                  className="max-w-full max-h-[560px] object-contain cursor-pointer"
+                  className="max-w-full max-h-[560px] object-contain cursor-pointer transition-opacity duration-150"
+                  onLoad={() => setImageLoading(false)}
+                  onError={() => setImageLoading(false)}
                   onClick={() => setShowImageModal(true)}
                   title="Click to view full resolution"
                 />
@@ -531,7 +590,7 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
             <div className="border-2 border-slate-900 bg-slate-950 p-2 shadow-hard-sm">
               <div className="flex items-center justify-between pb-1.5 px-1 border-b border-slate-800 text-xs font-mono text-slate-300">
                 <span className="font-bold flex items-center gap-1.5 text-amber-400">
-                  <ImageIcon className="w-3.5 h-3.5" /> [ ORIGINAL EXAM SCREENSHOT ]
+                  <ImageIcon className="w-3.5 h-3.5" /> [ ORIGINAL EXAM SCREENSHOT (Q{currentIndex + 1}) ]
                 </span>
                 <button
                   type="button"
@@ -541,12 +600,24 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
                   <Maximize2 className="w-3 h-3" /> [ EXPAND / ZOOM ]
                 </button>
               </div>
-              <div className="bg-white mt-1 p-2 max-h-[500px] overflow-auto flex items-center justify-center">
+              <div
+                key={`full-img-box-${currentIndex}`}
+                className="bg-white mt-1 p-2 max-h-[500px] min-h-[240px] overflow-auto flex items-center justify-center relative"
+              >
+                {imageLoading && (
+                  <div className="absolute inset-0 bg-slate-100 flex items-center justify-center font-mono text-xs text-slate-600 z-10 gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-900" />
+                    <span>[ LOADING SCREENSHOT {currentIndex + 1}... ]</span>
+                  </div>
+                )}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
+                  key={`full-img-${currentIndex}-${imageSrc?.slice(0, 40)}`}
                   src={imageSrc}
                   alt={`Original exam question ${currentIndex + 1}`}
-                  className="max-w-full max-h-[460px] object-contain cursor-pointer"
+                  className="max-w-full max-h-[460px] object-contain cursor-pointer transition-opacity duration-150"
+                  onLoad={() => setImageLoading(false)}
+                  onError={() => setImageLoading(false)}
                   onClick={() => setShowImageModal(true)}
                   title="Click to view full resolution"
                 />
@@ -673,6 +744,7 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
             </div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
+              key={`modal-img-${currentIndex}-${imageSrc?.slice(0, 40)}`}
               src={imageSrc}
               alt={`Full view diagram ${currentIndex + 1}`}
               className="max-w-full h-auto object-contain"
