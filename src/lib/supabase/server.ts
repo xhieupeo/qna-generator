@@ -34,12 +34,29 @@ export async function uploadQuizImage(
     const filePath = `quizzes/${quizId}/q${questionNumber}_${Date.now()}.${ext}`;
     const buffer = Buffer.from(base64Data, "base64");
 
-    const { error: uploadError } = await supabase.storage
+    let { error: uploadError } = await supabase.storage
       .from("quiz-images")
       .upload(filePath, buffer, {
         contentType: mimeType,
         upsert: true,
       });
+
+    // Auto-create bucket if it doesn't exist yet
+    if (
+      uploadError &&
+      (uploadError.message?.toLowerCase().includes("not found") ||
+        uploadError.message?.toLowerCase().includes("bucket"))
+    ) {
+      console.log("Bucket 'quiz-images' missing, creating public bucket...");
+      await supabase.storage.createBucket("quiz-images", { public: true });
+      const retryUpload = await supabase.storage
+        .from("quiz-images")
+        .upload(filePath, buffer, {
+          contentType: mimeType,
+          upsert: true,
+        });
+      uploadError = retryUpload.error;
+    }
 
     if (uploadError) {
       console.error("Supabase Storage upload error:", uploadError);
@@ -146,6 +163,9 @@ export async function saveQuestionBatch(
       );
       if (uploadedUrl) {
         finalImageUrl = uploadedUrl;
+      } else if (q.imageBase64) {
+        // Fallback: If Storage upload fails, store data URL so image is NEVER lost
+        finalImageUrl = `data:${q.imageMimeType || "image/png"};base64,${q.imageBase64}`;
       }
     }
 
@@ -225,6 +245,9 @@ export async function saveQuizToSupabase(params: {
       );
       if (uploadedUrl) {
         finalImageUrl = uploadedUrl;
+      } else if (q.imageBase64) {
+        // Fallback: If Storage upload fails, store data URL so image is NEVER lost
+        finalImageUrl = `data:${q.imageMimeType || "image/png"};base64,${q.imageBase64}`;
       }
     }
 

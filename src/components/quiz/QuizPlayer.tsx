@@ -584,6 +584,15 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
         ) : (
           /* Text Mode Layout */
           <div className="space-y-4 pt-1">
+            {(globalMode === "image" || questionModeOverride[currentIndex] === "image") && !imageSrc && (
+              <div className="border border-amber-300 bg-amber-50 p-3 text-xs font-mono text-amber-900 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  [ ℹ️ NO SCREENSHOT STORED ] Original image was not found for Question {currentIndex + 1} in this saved quiz. Showing digitized text.
+                </span>
+              </div>
+            )}
+
             {imageSrc && (
               <div className="flex items-center justify-end">
                 <button
