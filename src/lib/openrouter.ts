@@ -102,6 +102,8 @@ Instructions (Think-First Inverted Strategy):
      * NEVER output generic placeholder strings like "Option A", "Option B", "Option C", or "Option D".
      * If the screenshot does not display explicit multiple-choice options (e.g. if options were cut off or if it is an open-ended question stem), you MUST synthesize 4 realistic, domain-specific options: 1 strictly correct answer and 3 plausible, realistic distractors directly related to the question.
    - If the question allows multiple answers (e.g. "select all that apply" or multiple true statements), include all correct 0-based indices in "correctOptionIndices". For single-answer questions, include only the one correct index in "correctOptionIndices".
+   - CRITICAL ANSWER CITATION IN EXPLANATION:
+     * At the end of your "explanation", you MUST ALWAYS provide a concluding sentence explicitly stating: "Therefore, the correct answer is option X: <option text>" (where X is the uppercase letter A, B, C, D, etc., strictly corresponding to correctOptionIndex). This letter citation MUST strictly match correctOptionIndex and correctOptionIndices.
    - NEVER invent an unrelated question from another academic subject.
 3. **JSON Output Format**:
    You MUST return ONLY a valid JSON object matching this structure:

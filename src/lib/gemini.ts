@@ -1,8 +1,9 @@
 import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 import { ExtractedUnit, Question } from "./types";
 import { assertNoDegenerativeRepetition } from "./ocr-guards";
+import { crossValidateAnswerWithExplanation } from "./answer-validation";
 
-export { assertNoDegenerativeRepetition };
+export { assertNoDegenerativeRepetition, crossValidateAnswerWithExplanation };
 
 export interface GenerateMcqOptions {
   apiKey: string;
@@ -103,84 +104,7 @@ export function synthesizeOptionsFromExplanation(
   };
 }
 
-/**
- * Cross-validates and auto-aligns correctOptionIndex with explicit mathematical conclusions
- * stated in the explanation (e.g. "Thus ... which corresponds to option D" or "making fun(-1012) the correct call").
- */
-export function crossValidateAnswerWithExplanation(parsed: any): any {
-  if (!parsed || typeof parsed !== "object") return parsed;
-
-  const expl = parsed.explanation || "";
-  const rawOptions: string[] = Array.isArray(parsed.options)
-    ? parsed.options.map((opt: any) => String(opt || "").trim())
-    : [];
-
-  let matchedIndex: number | null = null;
-
-  if (expl) {
-    // 1. Explicit letter match (A through F)
-    const explicitMatch = expl.match(
-      /(?:corresponds to option|correct answer is|correct option is|the answer is|choice|option)\s+([A-F])\b/i
-    );
-    if (explicitMatch) {
-      const letter = explicitMatch[1].toUpperCase();
-      const letterIdx = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5 }[letter];
-      if (typeof letterIdx === "number" && (rawOptions.length === 0 || letterIdx < rawOptions.length)) {
-        matchedIndex = letterIdx;
-      }
-    }
-
-    // 2. Semantic option content match
-    // If no explicit letter was found, check if the concluding sentence or proof in the explanation
-    // explicitly specifies one of the options (e.g. "fun(-1012)", or mathematical formulas).
-    if (matchedIndex === null && rawOptions.length > 0) {
-      // Look especially at the concluding portion (last 400 chars) of the explanation
-      const conclusionPortion = expl.length > 400 ? expl.slice(-400) : expl;
-      
-      const cleanText = (t: string) => t.toLowerCase().replace(/[\s\(\)\;`'"]/g, "");
-      const cleanedConclusion = cleanText(conclusionPortion);
-
-      const candidateMatches: number[] = [];
-      rawOptions.forEach((opt, idx) => {
-        const cleanedOpt = cleanText(opt);
-        if (cleanedOpt.length >= 3 && cleanedConclusion.includes(cleanedOpt)) {
-          candidateMatches.push(idx);
-        }
-      });
-
-      if (candidateMatches.length === 1) {
-        matchedIndex = candidateMatches[0];
-      } else if (candidateMatches.length > 1) {
-        // If multiple options match (e.g. 1012 and -1012), pick the longest/most specific match
-        candidateMatches.sort((a, b) => rawOptions[b].length - rawOptions[a].length);
-        matchedIndex = candidateMatches[0];
-      }
-    }
-  }
-
-  if (typeof matchedIndex === "number") {
-    const currentIdx = typeof parsed.correctOptionIndex === "number" ? parsed.correctOptionIndex : 0;
-    if (
-      currentIdx !== matchedIndex &&
-      (currentIdx === 0 || !parsed.correctOptionIndices || parsed.correctOptionIndices.length <= 1)
-    ) {
-      parsed.correctOptionIndex = matchedIndex;
-      parsed.correctOptionIndices = [matchedIndex];
-    }
-  }
-
-  if (
-    !parsed.correctOptionIndices ||
-    !Array.isArray(parsed.correctOptionIndices) ||
-    parsed.correctOptionIndices.length === 0
-  ) {
-    parsed.correctOptionIndices = [
-      typeof parsed.correctOptionIndex === "number" ? parsed.correctOptionIndex : 0,
-    ];
-  }
-
-  return parsed;
-}
+// Note: crossValidateAnswerWithExplanation is imported from ./answer-validation and exported above.
 
 /**
  * Normalizes and repairs common LLM JSON syntax errors:
@@ -441,6 +365,8 @@ Instructions (Think-First Inverted Strategy):
      * NEVER output generic placeholder strings like "Option A", "Option B", "Option C", or "Option D".
      * If the screenshot does not display explicit multiple-choice options (e.g. if options were cut off or if it is an open-ended question stem), you MUST synthesize 4 realistic, domain-specific options: 1 strictly correct answer and 3 plausible, realistic distractors directly related to the question.
    - If the question allows multiple answers (e.g. "select all that apply" or multiple true statements), include all correct 0-based indices in "correctOptionIndices". For single-answer questions, include only the one correct index in "correctOptionIndices".
+   - CRITICAL ANSWER CITATION IN EXPLANATION:
+     * At the end of your "explanation", you MUST ALWAYS provide a concluding sentence explicitly stating: "Therefore, the correct answer is option X: <option text>" (where X is the uppercase letter A, B, C, D, etc., strictly corresponding to correctOptionIndex). This letter citation MUST strictly match correctOptionIndex and correctOptionIndices.
    - NEVER invent an unrelated question from another academic subject.
 3. **JSON Output Format**:
    Return a valid JSON object matching this structure:
