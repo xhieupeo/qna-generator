@@ -4,6 +4,7 @@ import {
   areOptionsDummy,
   synthesizeOptionsFromExplanation,
 } from "./gemini";
+import { crossValidateAnswerWithExplanation } from "./answer-validation";
 
 export interface GenerateOpenRouterOptions {
   apiKey: string;
@@ -230,18 +231,26 @@ Instructions (Think-First Inverted Strategy):
     finalOptions = synthesized.options;
   }
 
-  const maxOptionsCount = Math.max(finalOptions.length, 6);
+  // Ensure final recovered or synthesized options are cross-validated against explanation
+  const revalidated = crossValidateAnswerWithExplanation({
+    options: finalOptions,
+    correctOptionIndex: parsed.correctOptionIndex,
+    correctOptionIndices: parsed.correctOptionIndices,
+    explanation: parsed.explanation,
+  });
+
+  const maxOptionsCount = Math.max(finalOptions.length, 1);
 
   const primaryCorrectIndex =
-    typeof parsed.correctOptionIndex === "number" &&
-    parsed.correctOptionIndex >= 0 &&
-    parsed.correctOptionIndex < maxOptionsCount
-      ? parsed.correctOptionIndex
+    typeof revalidated.correctOptionIndex === "number" &&
+    revalidated.correctOptionIndex >= 0 &&
+    revalidated.correctOptionIndex < maxOptionsCount
+      ? revalidated.correctOptionIndex
       : 0;
 
   let correctIndices: number[] = [];
-  if (Array.isArray(parsed.correctOptionIndices) && parsed.correctOptionIndices.length > 0) {
-    correctIndices = parsed.correctOptionIndices
+  if (Array.isArray(revalidated.correctOptionIndices) && revalidated.correctOptionIndices.length > 0) {
+    correctIndices = revalidated.correctOptionIndices
       .filter((idx: any) => typeof idx === "number" && idx >= 0 && idx < maxOptionsCount)
       .sort((a: number, b: number) => a - b);
   }

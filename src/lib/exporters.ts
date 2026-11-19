@@ -1,4 +1,5 @@
-import { Question, Quiz } from "./types";
+import type { Question, Quiz } from "./types";
+import { getQuestionCorrectIndices } from "./answer-validation";
 
 /**
  * Exports questions to Moodle GIFT format
@@ -6,12 +7,7 @@ import { Question, Quiz } from "./types";
 export function exportToGift(questions: Question[]): string {
   return questions
     .map((q) => {
-      const correctIndices =
-        Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0
-          ? q.correctOptionIndices
-          : typeof q.correctOptionIndex === "number"
-          ? [q.correctOptionIndex]
-          : [0];
+      const correctIndices = getQuestionCorrectIndices(q);
       const isMultiple = correctIndices.length > 1;
       const weight = isMultiple ? Math.round(100 / correctIndices.length) : 100;
 
@@ -48,12 +44,7 @@ export function exportToAiken(questions: Question[]): string {
       const optionsText = q.options
         .map((opt, i) => `${letters[i]}. ${opt}`)
         .join("\n");
-      const correctIndices =
-        Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0
-          ? q.correctOptionIndices
-          : typeof q.correctOptionIndex === "number"
-          ? [q.correctOptionIndex]
-          : [0];
+      const correctIndices = getQuestionCorrectIndices(q);
       const answerLetters = correctIndices
         .map((idx) => letters[idx] || "A")
         .join(", ");
@@ -91,12 +82,7 @@ export function exportToCsv(questions: Question[]): string {
 
   const rows = questions.map((q) => {
     const letters = ["A", "B", "C", "D"];
-    const correctIndices =
-      Array.isArray(q.correctOptionIndices) && q.correctOptionIndices.length > 0
-        ? q.correctOptionIndices
-        : typeof q.correctOptionIndex === "number"
-        ? [q.correctOptionIndex]
-        : [0];
+    const correctIndices = getQuestionCorrectIndices(q);
     const answerLetters = correctIndices
       .map((idx) => letters[idx] || "A")
       .join(", ");

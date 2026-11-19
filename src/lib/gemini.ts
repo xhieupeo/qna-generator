@@ -233,11 +233,11 @@ export function extractJsonFromResponse(raw: string): any {
       // If the model's explanation explicitly concludes e.g. "which corresponds to option D" or "correct option is D",
       // auto-align the correct index to avoid contradiction between explanation and judge system.
       const explicitLetterMatch = explanation.match(
-        /(?:corresponds to option|correct answer is|correct option is|the answer is|choice)\s+([A-D])\b/i
+        /(?:corresponds to option|correct answer is|correct option is|the answer is|choice)\s+([A-F])\b/i
       );
       if (explicitLetterMatch) {
         const letter = explicitLetterMatch[1].toUpperCase();
-        const letterIdx = { A: 0, B: 1, C: 2, D: 3 }[letter];
+        const letterIdx = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5 }[letter];
         if (typeof letterIdx === "number" && (!singleIndexMatch || recoveredCorrectIndex === 0)) {
           recoveredCorrectIndex = letterIdx;
           recoveredCorrectIndices = [letterIdx];
@@ -499,18 +499,26 @@ Instructions (Think-First Inverted Strategy):
     finalOptions = synthesized.options;
   }
 
-  const maxOptionsCount = Math.max(finalOptions.length, 6);
+  // Ensure final recovered or synthesized options are cross-validated against explanation
+  const revalidated = crossValidateAnswerWithExplanation({
+    options: finalOptions,
+    correctOptionIndex: parsed.correctOptionIndex,
+    correctOptionIndices: parsed.correctOptionIndices,
+    explanation: parsed.explanation,
+  });
+
+  const maxOptionsCount = Math.max(finalOptions.length, 1);
 
   const primaryCorrectIndex =
-    typeof parsed.correctOptionIndex === "number" &&
-    parsed.correctOptionIndex >= 0 &&
-    parsed.correctOptionIndex < maxOptionsCount
-      ? parsed.correctOptionIndex
+    typeof revalidated.correctOptionIndex === "number" &&
+    revalidated.correctOptionIndex >= 0 &&
+    revalidated.correctOptionIndex < maxOptionsCount
+      ? revalidated.correctOptionIndex
       : 0;
 
   let correctIndices: number[] = [];
-  if (Array.isArray(parsed.correctOptionIndices) && parsed.correctOptionIndices.length > 0) {
-    correctIndices = parsed.correctOptionIndices
+  if (Array.isArray(revalidated.correctOptionIndices) && revalidated.correctOptionIndices.length > 0) {
+    correctIndices = revalidated.correctOptionIndices
       .filter((idx: any) => typeof idx === "number" && idx >= 0 && idx < maxOptionsCount)
       .sort((a: number, b: number) => a - b);
   }

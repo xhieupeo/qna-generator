@@ -55,7 +55,7 @@ assert.equal(
     id: "unit_35",
     questionNumber: 35,
     rawText: "Question 35 (DBI202.webp)",
-    images: [{ id: "img_1", mimeType: "image/jpeg", base64Data: "/9j/4AAQ..." }],
+    images: [{ id: "img_1", mimeType: "image/jpeg", base64Data: "/9j/4AAQ" + "A".repeat(250) }],
   }),
   false
 );

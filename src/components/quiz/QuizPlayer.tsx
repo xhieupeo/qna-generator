@@ -128,11 +128,22 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
 
   const handleSelect = (optionIndex: number) => {
     if (isSubmitted) return;
+    const isMultiSelect = currentQ ? getQuestionCorrectIndices(currentQ).length > 1 : false;
+
     setSelectedAnswers((prev) => {
       const current = prev[currentIndex] || [];
-      const next = current.includes(optionIndex)
-        ? current.filter((i) => i !== optionIndex)
-        : [...current, optionIndex].sort((a, b) => a - b);
+      let next: number[];
+
+      if (isMultiSelect) {
+        // Multi-select question: toggle selection
+        next = current.includes(optionIndex)
+          ? current.filter((i) => i !== optionIndex)
+          : [...current, optionIndex].sort((a, b) => a - b);
+      } else {
+        // Single-choice question: radio replacement behavior
+        next = current.includes(optionIndex) ? [] : [optionIndex];
+      }
+
       return {
         ...prev,
         [currentIndex]: next,
@@ -146,11 +157,20 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
   const calculateScore = () => {
     let score = 0;
     questions.forEach((q, idx) => {
-      const correct = getQuestionCorrectIndices(q);
-      const selected = selectedAnswers[idx] || [];
+      const rawCorrect = getQuestionCorrectIndices(q);
+      const rawSelected = selectedAnswers[idx] || [];
+
+      const correct = Array.from(
+        new Set(rawCorrect.map((v) => Number(v)).filter((v) => !isNaN(v)))
+      ).sort((a, b) => a - b);
+      const selected = Array.from(
+        new Set(rawSelected.map((v) => Number(v)).filter((v) => !isNaN(v)))
+      ).sort((a, b) => a - b);
+
       const isCorrect =
+        correct.length > 0 &&
         correct.length === selected.length &&
-        correct.every((val) => selected.includes(val));
+        correct.every((val, i) => val === selected[i]);
       if (isCorrect) {
         score++;
       }
@@ -397,10 +417,17 @@ export const QuizPlayer: React.FC<QuizPlayerProps> = ({
           let btnClass = "bg-white text-slate-700 border-slate-400";
 
           if (isSubmitted) {
-            const correct = getQuestionCorrectIndices(q);
+            const rawCorrect = getQuestionCorrectIndices(q);
+            const correct = Array.from(
+              new Set(rawCorrect.map((v) => Number(v)).filter((v) => !isNaN(v)))
+            ).sort((a, b) => a - b);
+            const selected = Array.from(
+              new Set(userAns.map((v) => Number(v)).filter((v) => !isNaN(v)))
+            ).sort((a, b) => a - b);
             const isCorrect =
-              correct.length === userAns.length &&
-              correct.every((val) => userAns.includes(val));
+              correct.length > 0 &&
+              correct.length === selected.length &&
+              correct.every((val, i) => val === selected[i]);
             btnClass = isCorrect
               ? "bg-emerald-600 text-white border-emerald-700"
               : "bg-red-600 text-white border-red-700";
