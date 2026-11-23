@@ -16,7 +16,7 @@
 (function () {
   "use strict";
 
-  const DECORATIVE_REGEX = /(avatar|smilie|smiley|emoji|reaction|badge|logo|icon|favicon)/i;
+  const DECORATIVE_REGEX = /(avatar|smilie|smiley|emoji|reaction|badge|logo|icon|favicon|sidebar|study-icon|presets)/i;
 
   function escapeHtml(str) {
     return String(str || "")
@@ -377,8 +377,8 @@
     button.disabled = true;
 
     try {
-      // 1. Extract Clean Title & Subject Code (fuo-downloader parse_thread_metadata logic)
-      const h1 = document.querySelector("h1.p-title-value");
+      // 1. Extract Clean Title & Subject Code (Next.js & XenForo support)
+      const h1 = document.querySelector("h1.p-title-value") || document.querySelector("h1");
       let title = document.title;
       let subjectCode = "EXAM";
 
@@ -387,9 +387,12 @@
         clone.querySelectorAll(".label, .label-append").forEach((el) => el.remove());
         title = clone.textContent.replace(/\s+/g, " ").trim() || document.title;
       }
+      title = title.replace(/\s*\|\s*FuOverflow.*$/i, "").trim() || title;
 
-      // Detect Subject Code from breadcrumbs or title (e.g. DBI202, PRO192, MAD101)
-      const breadcrumbLinks = document.querySelectorAll("ul.p-breadcrumbs li a");
+      // Detect Subject Code from breadcrumbs or title (e.g. DBI202, PRO192, MAD101, JPD113)
+      const breadcrumbLinks = document.querySelectorAll(
+        "ul.p-breadcrumbs li a, nav ol li a, nav a, [aria-label*='breadcrumb' i] a"
+      );
       for (const bc of breadcrumbLinks) {
         const txt = bc.textContent.trim().toUpperCase();
         if (/^[A-Z]{2,4}\d{2,4}[A-Z]?$/.test(txt)) {
@@ -402,7 +405,7 @@
         if (m) subjectCode = m[1].toUpperCase();
       }
 
-      // 2. Collect Candidate Items (fuo-downloader extract_question_items_from_page logic)
+      // 2. Collect Candidate Items (Next.js Grid + XenForo fallbacks)
       const candidates = [];
       const seenKeys = new Set();
 
@@ -425,45 +428,89 @@
         candidates.push({ fullUrl, mediaUrl, thumbUrl, imgEl, rawFilename });
       }
 
-      // Priority 1: XenForo Attachment Cards (<li class="file">)
-      document.querySelectorAll("li.file").forEach((li, idx) => {
-        const a = li.querySelector("a.file-preview, a[href*='attachments/']");
-        const img = li.querySelector("img");
-        const nameEl = li.querySelector(".file-name");
+      // Priority 1: Next.js Attachment Grid (FU Overflow modern layout)
+      document.querySelectorAll("ul[aria-label*='Ảnh đính kèm' i] li, a[href*='/media/']").forEach((container, idx) => {
+        const a = container.tagName === "A" ? container : container.querySelector("a[href*='/media/']");
+        const img = container.querySelector("img");
+        if (!img) return;
 
-        const fullUrl = a ? resolveUrl(a.getAttribute("href") || a.href) : "";
-        const mediaUrl = extractMediaHref(a);
-        const thumbUrl = img
-          ? resolveUrl(img.getAttribute("data-src") || img.getAttribute("data-url") || img.getAttribute("src") || img.src || "")
-          : "";
-        const rawFilename =
-          (nameEl && (nameEl.getAttribute("title") || nameEl.textContent.trim())) ||
-          (img && img.getAttribute("alt")) ||
-          `Q${idx + 1}.jpg`;
+        const thumbUrl = resolveUrl(
+          img.getAttribute("data-src") || img.getAttribute("data-url") || img.getAttribute("src") || img.src || ""
+        );
+        const mediaUrl = a ? resolveUrl(a.getAttribute("href") || a.href || "") : "";
+        const ariaLabel = (a && a.getAttribute("aria-label")) || "";
+        const alt = img.getAttribute("alt") || "";
 
-        addCandidate(fullUrl, mediaUrl, thumbUrl, img, rawFilename);
+        let rawFilename = "";
+        const mFile = ariaLabel.match(/:\s*([^\s—–-]+(?:\.webp|\.png|\.jpe?g))/i);
+        if (mFile) {
+          rawFilename = mFile[1];
+        } else {
+          const mQ = ariaLabel.match(/(q\d+(?:\.webp|\.png|\.jpe?g)?)/i) || alt.match(/(ảnh\s*\d+\/\d+)/i);
+          if (mQ) rawFilename = mQ[1];
+          else rawFilename = `Q${idx + 1}.webp`;
+        }
+
+        addCandidate("", mediaUrl, thumbUrl, img, rawFilename);
       });
 
-      // Priority 2: Inline lightbox images (.bbWrapper a.js-lbImage)
-      document.querySelectorAll(".bbWrapper a.js-lbImage, .bbWrapper a[href*='attachments/']").forEach((a, idx) => {
-        const img = a.querySelector("img");
-        const fullUrl = resolveUrl(a.getAttribute("href") || a.href || "");
-        const mediaUrl = extractMediaHref(a);
-        const thumbUrl = img
-          ? resolveUrl(img.getAttribute("data-src") || img.getAttribute("data-url") || img.getAttribute("src") || img.src || "")
-          : "";
-        const rawFilename = (img && (img.getAttribute("alt") || img.getAttribute("title"))) || `Q${idx + 1}.jpg`;
-
-        addCandidate(fullUrl, mediaUrl, thumbUrl, img, rawFilename);
-      });
-
-      // Priority 3: Fallback DOM images
+      // Priority 2: XenForo Attachment Cards (<li class="file">)
       if (candidates.length === 0) {
-        document.querySelectorAll(".bbWrapper img, .message-body img").forEach((img, idx) => {
+        document.querySelectorAll("li.file").forEach((li, idx) => {
+          const a = li.querySelector("a.file-preview, a[href*='attachments/']");
+          const img = li.querySelector("img");
+          const nameEl = li.querySelector(".file-name");
+
+          const fullUrl = a ? resolveUrl(a.getAttribute("href") || a.href) : "";
+          const mediaUrl = extractMediaHref(a);
+          const thumbUrl = img
+            ? resolveUrl(img.getAttribute("data-src") || img.getAttribute("data-url") || img.getAttribute("src") || img.src || "")
+            : "";
+          const rawFilename =
+            (nameEl && (nameEl.getAttribute("title") || nameEl.textContent.trim())) ||
+            (img && img.getAttribute("alt")) ||
+            `Q${idx + 1}.jpg`;
+
+          addCandidate(fullUrl, mediaUrl, thumbUrl, img, rawFilename);
+        });
+      }
+
+      // Priority 3: Inline lightbox images (.bbWrapper a.js-lbImage)
+      if (candidates.length === 0) {
+        document.querySelectorAll(".bbWrapper a.js-lbImage, .bbWrapper a[href*='attachments/']").forEach((a, idx) => {
+          const img = a.querySelector("img");
+          const fullUrl = resolveUrl(a.getAttribute("href") || a.href || "");
+          const mediaUrl = extractMediaHref(a);
+          const thumbUrl = img
+            ? resolveUrl(img.getAttribute("data-src") || img.getAttribute("data-url") || img.getAttribute("src") || img.src || "")
+            : "";
+          const rawFilename = (img && (img.getAttribute("alt") || img.getAttribute("title"))) || `Q${idx + 1}.jpg`;
+
+          addCandidate(fullUrl, mediaUrl, thumbUrl, img, rawFilename);
+        });
+      }
+
+      // Priority 4: Direct exam images inside article cards
+      if (candidates.length === 0) {
+        document.querySelectorAll("article.fuo-card img, article img").forEach((img, idx) => {
           const src = resolveUrl(
             img.getAttribute("data-src") || img.getAttribute("data-url") || img.getAttribute("src") || img.src || ""
           );
-          addCandidate("", "", src, img, img.getAttribute("alt") || `Q${idx + 1}.jpg`);
+          if (src && (src.includes("cdn.fuoverflow.com/exam") || src.includes("/attachments/"))) {
+            addCandidate("", "", src, img, img.getAttribute("alt") || `Q${idx + 1}.webp`);
+          }
+        });
+      }
+
+      // Priority 5: Fallback DOM images in post bodies
+      if (candidates.length === 0) {
+        document.querySelectorAll(".bbWrapper img, .message-body img, main img").forEach((img, idx) => {
+          const src = resolveUrl(
+            img.getAttribute("data-src") || img.getAttribute("data-url") || img.getAttribute("src") || img.src || ""
+          );
+          if (src && !DECORATIVE_REGEX.test(src)) {
+            addCandidate("", "", src, img, img.getAttribute("alt") || `Q${idx + 1}.jpg`);
+          }
         });
       }
 

@@ -7,7 +7,7 @@ interface ParseOptions {
 }
 
 const IMAGE_EXT_REGEX = /\.(webp|png|jpe?g|gif|bmp|heic|heif)(\?.*)?$/i;
-const DECORATIVE_IMG_REGEX = /(avatar|smilie|smiley|emoji|reaction|badge|logo|icon|favicon)/i;
+const DECORATIVE_IMG_REGEX = /(avatar|smilie|smiley|emoji|reaction|badge|logo|icon|favicon|sidebar|study-icon|presets)/i;
 
 function resolveAgainstBase(href: string, baseUrl?: string): string {
   const trimmed = (href || "").trim();
@@ -36,18 +36,16 @@ export function parseHtmlContent(
     undefined;
 
   // 1. Extract Clean Title
-  const h1Title = $("h1.p-title-value").first().clone();
+  const h1Title = $("h1.p-title-value, h1").first().clone();
   h1Title.find(".label, .label-append").remove();
   let title = h1Title.text().replace(/\s+/g, " ").trim();
   if (!title) {
     title = $("title").first().text().replace(/\s+/g, " ").trim();
   }
   if (!title) {
-    title = $("h1").first().text().replace(/\s+/g, " ").trim();
-  }
-  if (!title) {
     title = "Generated Quiz";
   }
+  title = title.replace(/\s*\|\s*FuOverflow.*$/i, "").trim() || title;
 
   // 2. Remove non-exam UI chrome, navigation, menus, sidebars, breadcrumbs, and footers
   $(
@@ -206,7 +204,57 @@ export function parseHtmlContent(
     }
   }
 
-  // 3B. Priority 2: Explicit Question / Quiz Containers
+  // 3B. Next.js Exam Attachment Grid (FU Overflow modern layout)
+  const nextJsAttachmentGrid = $('ul[aria-label*="Ảnh đính kèm" i] li, a[href*="/media/"]').filter(
+    (_, el) => $(el).find("img").length > 0
+  );
+
+  if (nextJsAttachmentGrid.length > 0) {
+    const seenGridKeys = new Set<string>();
+    nextJsAttachmentGrid.each((_, el) => {
+      const container = $(el);
+      const a = container.is("a") ? container : container.find('a[href*="/media/"]').first();
+      const img = container.find("img").first();
+      if (!img.length) return;
+
+      const ariaLabel = a.attr("aria-label") || "";
+      const alt = img.attr("alt") || "";
+      let rawFilename = "";
+      const mFile = ariaLabel.match(/:\s*([^\s—–-]+(?:\.webp|\.png|\.jpe?g))/i);
+      if (mFile) {
+        rawFilename = mFile[1];
+      } else {
+        const mQ =
+          ariaLabel.match(/(q\d+(?:\.webp|\.png|\.jpe?g)?)/i) ||
+          alt.match(/(ảnh\s*\d+\/\d+)/i);
+        if (mQ) rawFilename = mQ[1];
+      }
+
+      const imgData = extractImgData(img, imageCounter++);
+      if (imgData) {
+        const key = imgData.src || imgData.base64Data.slice(0, 64);
+        if (!seenGridKeys.has(key)) {
+          seenGridKeys.add(key);
+          const qNum = units.length + 1;
+          const label = rawFilename
+            ? `Question ${qNum} (${rawFilename})`
+            : ariaLabel || alt || `Question ${qNum}`;
+          units.push({
+            id: `unit_${qNum}`,
+            questionNumber: qNum,
+            rawText: label,
+            images: [imgData],
+          });
+        }
+      }
+    });
+
+    if (units.length > 0) {
+      return { title, units };
+    }
+  }
+
+  // 3C. Priority 2: Explicit Question / Quiz Containers
   const questionSelectors = [
     ".question",
     ".que",

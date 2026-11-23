@@ -141,12 +141,26 @@ async function run() {
   const $ = cheerio.load(html);
 
   // Extract Page / Thread Title
-  let pageTitle =
+  let rawTitle =
     $("h1.p-title-value").text().trim() ||
+    $("h1").first().text().trim() ||
     $("title").text().trim() ||
     "fuoverflow_quiz";
 
-  // Clean filename
+  // Clean title: strip " | FuOverflow Community..." and extra whitespace
+  let pageTitle = rawTitle
+    .replace(/\s*\|\s*FuOverflow.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim() || rawTitle;
+
+  // Detect Subject Code if present (e.g. JPD113, DBI202)
+  let subjectCode = "";
+  const codeMatch = pageTitle.match(/\b([A-Za-z]{2,4}\d{2,4}[A-Za-z]?)\b/);
+  if (codeMatch) {
+    subjectCode = codeMatch[1].toUpperCase();
+  }
+
+  // Clean filename for output directory
   const cleanTitle = pageTitle
     .replace(/[\\/:*?"<>|]/g, "_")
     .replace(/\s+/g, " ")
@@ -158,11 +172,14 @@ async function run() {
     fs.mkdirSync(targetDir, { recursive: true });
   }
 
+  const DECORATIVE_REGEX =
+    /(avatar|smilie|smiley|emoji|reaction|badge|logo|icon|favicon|sidebar|study-icon|presets)/i;
+
   // Find all candidate image URLs
   const candidateImages = [];
   const processedUrls = new Set();
 
-  function addCandidate(src, caption = "") {
+  function addCandidate(src, caption = "", rawFilename = "") {
     if (!src) return;
     let absoluteUrl = src;
     if (src.startsWith("//")) {
@@ -178,10 +195,9 @@ async function run() {
     }
 
     if (
-      absoluteUrl.includes("/smilies/") ||
-      absoluteUrl.includes("/avatars/") ||
-      absoluteUrl.includes("favicon") ||
-      absoluteUrl.endsWith(".svg")
+      DECORATIVE_REGEX.test(absoluteUrl) ||
+      absoluteUrl.endsWith(".svg") ||
+      absoluteUrl.includes("data:image/svg")
     ) {
       return;
     }
@@ -191,34 +207,109 @@ async function run() {
       candidateImages.push({
         url: absoluteUrl,
         caption,
+        rawFilename,
       });
     }
   }
 
-  // 1. Check forum attachments (<a class="js-lbImage" href="...">)
-  $("a.js-lbImage, a.lbImage").each((_, el) => {
-    const href = $(el).attr("href");
-    const caption = $(el).attr("data-caption") || $(el).text().trim();
-    addCandidate(href, caption);
-  });
+  // 1. Next.js Attachment Grid: ul[aria-label*="Ảnh đính kèm"] li
+  const nextGrid = $('ul[aria-label*="Ảnh đính kèm" i] li');
+  if (nextGrid.length > 0) {
+    nextGrid.each((idx, el) => {
+      const a = $(el).find('a[href*="/media/"]').first();
+      const img = $(el).find("img").first();
+      if (!img.length) return;
 
-  // 2. Check embedded BBCode images (<img class="bbImage" src="...">)
-  $("img.bbImage, .bbWrapper img, .message-content img, .attachmentImage").each(
-    (_, el) => {
       const src =
-        $(el).attr("src") ||
-        $(el).attr("data-url") ||
-        $(el).attr("data-src");
-      const alt = $(el).attr("alt") || "";
-      addCandidate(src, alt);
-    }
-  );
+        img.attr("src") || img.attr("data-src") || img.attr("data-url") || "";
+      const alt = img.attr("alt") || "";
+      const ariaLabel = a.attr("aria-label") || "";
 
-  // 3. Fallback: all images in post body
+      // Extract filename from ariaLabel like "Xem ảnh 1 trên 30: q1.webp — dành cho..."
+      let rawFilename = "";
+      const mFile = ariaLabel.match(/:\s*([^\s—–-]+(?:\.webp|\.png|\.jpe?g))/i);
+      if (mFile) {
+        rawFilename = mFile[1];
+      } else {
+        const mQ =
+          ariaLabel.match(/(q\d+(?:\.webp|\.png|\.jpe?g)?)/i) ||
+          alt.match(/(ảnh\s*\d+\/\d+)/i);
+        if (mQ) rawFilename = mQ[1];
+      }
+
+      const caption =
+        ariaLabel || alt || (rawFilename ? `Question ${idx + 1} (${rawFilename})` : `Question ${idx + 1}`);
+      addCandidate(src, caption, rawFilename);
+    });
+  }
+
+  // 2. Next.js /media/ anchors with CDN exam images
   if (candidateImages.length === 0) {
-    $("img").each((_, el) => {
-      const src = $(el).attr("src");
-      addCandidate(src);
+    $('a[href*="/media/"]').each((idx, el) => {
+      const img = $(el).find("img");
+      if (!img.length) return;
+      const src =
+        img.attr("src") || img.attr("data-src") || img.attr("data-url") || "";
+      const alt = img.attr("alt") || "";
+      const ariaLabel = $(el).attr("aria-label") || "";
+      let rawFilename = "";
+      const mFile = ariaLabel.match(/:\s*([^\s—–-]+(?:\.webp|\.png|\.jpe?g))/i);
+      if (mFile) rawFilename = mFile[1];
+      addCandidate(src, ariaLabel || alt, rawFilename);
+    });
+  }
+
+  // 3. Exam CDN direct images inside article cards (Next.js article.fuo-card)
+  if (candidateImages.length === 0) {
+    $("article.fuo-card img, article img, div[id^='post-'] img").each((idx, el) => {
+      const src = $(el).attr("src") || $(el).attr("data-src") || "";
+      if (src && (src.includes("cdn.fuoverflow.com/exam") || src.includes("/attachments/"))) {
+        const alt = $(el).attr("alt") || "";
+        addCandidate(src, alt);
+      }
+    });
+  }
+
+  // 4. Legacy XenForo attachments (<a class="js-lbImage" href="...">, li.file)
+  if (candidateImages.length === 0) {
+    $("li.file").each((idx, el) => {
+      const a = $(el).find("a.file-preview, a[href*='attachments/']");
+      const img = $(el).find("img");
+      const src =
+        a.attr("href") ||
+        img.attr("src") ||
+        img.attr("data-url") ||
+        img.attr("data-src") ||
+        "";
+      const name = $(el).find(".file-name").text().trim() || img.attr("alt") || "";
+      addCandidate(src, name, name);
+    });
+
+    $("a.js-lbImage, a.lbImage").each((_, el) => {
+      const href = $(el).attr("href");
+      const caption = $(el).attr("data-caption") || $(el).text().trim();
+      addCandidate(href, caption);
+    });
+
+    $("img.bbImage, .bbWrapper img, .message-content img, .attachmentImage").each(
+      (_, el) => {
+        const src =
+          $(el).attr("src") ||
+          $(el).attr("data-url") ||
+          $(el).attr("data-src");
+        const alt = $(el).attr("alt") || "";
+        addCandidate(src, alt);
+      }
+    );
+  }
+
+  // 5. Strict Safe Fallback (only non-decorative images inside main content)
+  if (candidateImages.length === 0) {
+    $("article, main, #content").find("img").each((_, el) => {
+      const src = $(el).attr("src") || $(el).attr("data-src") || "";
+      if (src && !DECORATIVE_REGEX.test(src)) {
+        addCandidate(src, $(el).attr("alt") || "");
+      }
     });
   }
 
@@ -260,9 +351,9 @@ async function run() {
 
     const downloaded = await downloadImage(item.url, baseUrl);
     if (downloaded) {
-      let ext = downloaded.mimeType.split("/")[1] || "png";
+      let ext = downloaded.mimeType.split("/")[1] || "webp";
       if (ext === "jpeg") ext = "jpg";
-      const filename = `fuoverflow_q${i + 1}_${Date.now()}.${ext}`;
+      const filename = item.rawFilename || `q${i + 1}.${ext}`;
       const filePath = path.join(targetDir, filename);
 
       fs.writeFileSync(filePath, downloaded.buffer);
@@ -286,11 +377,10 @@ async function run() {
 
     const questionBlocksHtml = downloadedAssets
       .map((asset, idx) => {
+        const qTitle = asset.caption ? `Question ${idx + 1} (${asset.caption}):` : `Question ${idx + 1}:`;
         return `
-  <div class="question" style="margin-bottom: 24px; padding: 16px; border: 1px solid #0f172a;">
-    <p><strong>Question ${idx + 1}:</strong> ${
-          asset.caption || "Examine the question/diagram below and solve."
-        }</p>
+  <div class="question" style="margin-bottom: 24px; padding: 16px; border: 1px solid #0f172a; background-color: #ffffff;">
+    <p><strong>${qTitle}</strong> Examine the question/diagram below and solve.</p>
     <img src="data:${asset.mimeType};base64,${
           asset.base64Data
         }" alt="FU Overflow Question ${
