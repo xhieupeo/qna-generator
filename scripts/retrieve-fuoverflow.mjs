@@ -410,16 +410,41 @@ ${questionBlocksHtml}
     const rootSamplePath = path.resolve(`fuoverflow_latest_ready.html`);
     fs.writeFileSync(rootSamplePath, fullHtml, "utf8");
 
+    // Generate JSON file with structured question image assets
+    const quizJson = {
+      title: pageTitle,
+      subjectCode: subjectCode || undefined,
+      sourceUrl: baseUrl,
+      retrievedAt: new Date().toISOString(),
+      totalQuestions: downloadedAssets.length,
+      questions: downloadedAssets.map((asset, idx) => ({
+        questionNumber: idx + 1,
+        filename: asset.filename,
+        caption: asset.caption || `Question ${idx + 1}`,
+        mimeType: asset.mimeType,
+        filePath: asset.filePath,
+        dataUrl: `data:${asset.mimeType};base64,${asset.base64Data}`,
+      })),
+    };
+
+    const jsonOutputPath = path.join(targetDir, `${cleanTitle}_ready.json`);
+    fs.writeFileSync(jsonOutputPath, JSON.stringify(quizJson, null, 2), "utf8");
+
+    const rootJsonPath = path.resolve(`fuoverflow_latest_ready.json`);
+    fs.writeFileSync(rootJsonPath, JSON.stringify(quizJson, null, 2), "utf8");
+
     console.log("\n=======================================================");
     console.log("SUCCESSFULLY RETRIEVED FU OVERFLOW IMAGES!");
     console.log(
       `- Downloaded Images: ${downloadedAssets.length} saved in ${targetDir}`
     );
-    console.log(`- QnA Generator File: ${htmlOutputPath}`);
-    console.log(`- Quick Access File: ${rootSamplePath}`);
+    console.log(`- HTML File (QnA Ready): ${htmlOutputPath}`);
+    console.log(`- JSON File (Direct Data): ${jsonOutputPath}`);
+    console.log(`- Quick Access HTML: ${rootSamplePath}`);
+    console.log(`- Quick Access JSON: ${rootJsonPath}`);
     console.log("=======================================================");
     console.log(
-      "\nYou can now drag and drop 'fuoverflow_latest_ready.html' directly into your QnA Generator website to automatically create verified multiple-choice questions!"
+      "\nYou can now use 'fuoverflow_latest_ready.html' or 'fuoverflow_latest_ready.json'!"
     );
   }
 }
