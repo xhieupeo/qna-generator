@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         FU Overflow & FuExam to QnA Generator (1-Click Exporter)
 // @namespace    https://github.com/xhieupeo/qna-generator
-// @version      2.2.0
-// @description  Extract all exam question Full-HD images & community answers from FU Overflow / FuExam threads with 100% Free In-Browser OCR, click-to-modal capture, and AI JSON export.
+// @version      2.3.0
+// @description  Extract all exam question Full-HD images & community answers from FU Overflow / FuExam threads with CSP-safe In-Browser OCR, async lightbox blob capture, and AI JSON export.
 // @author       QnA Generator Team
 // @match        https://fuoverflow.com/threads/*
 // @match        http://fuoverflow.com/threads/*
@@ -12,7 +12,7 @@
 // @grant        GM_setClipboard
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @require      https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js
+// @require      https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js
 // @connect      *
 // ==/UserScript==
 
@@ -50,6 +50,50 @@
       reader.onloadend = () => resolve(String(reader.result || ""));
       reader.onerror = () => reject(new Error("FileReader failed"));
       reader.readAsDataURL(blob);
+    });
+  }
+
+  function gmFetchAnonymous(url, responseType = "text", timeout = 30000) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest === "function") {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url,
+          responseType,
+          anonymous: true,
+          timeout,
+          onload: (res) => {
+            if (res.status >= 200 && res.status < 300) {
+              resolve(responseType === "text" ? res.responseText : res.response);
+            } else {
+              reject(new Error(`HTTP ${res.status} fetching ${url}`));
+            }
+          },
+          onerror: () => reject(new Error(`Network error fetching ${url}`)),
+          ontimeout: () => reject(new Error(`Timeout fetching ${url}`)),
+        });
+        return;
+      }
+      fetch(url, { credentials: "omit" })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
+          return responseType === "text" ? res.text() : res.arrayBuffer();
+        })
+        .then(resolve)
+        .catch(reject);
+    });
+  }
+
+  function getImageDimensions(dataUrl) {
+    return new Promise((resolve) => {
+      if (!dataUrl || !dataUrl.startsWith("data:image/")) {
+        resolve({ width: 0, height: 0 });
+        return;
+      }
+      const img = new Image();
+      img.onload = () => resolve({ width: img.naturalWidth || img.width || 0, height: img.naturalHeight || img.height || 0 });
+      img.onerror = () => resolve({ width: 0, height: 0 });
+      img.src = dataUrl;
     });
   }
 
@@ -335,35 +379,309 @@
     ];
   }
 
+  const TESS_CDN = {
+    worker: "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js",
+    coreSimd: "https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0/tesseract-core-simd-lstm.wasm.js",
+    coreFallback: "https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0/tesseract-core-lstm.wasm.js",
+    langs: {
+      jpn: "https://cdn.jsdelivr.net/npm/@tesseract.js-data/jpn/4.0.0_best_int/jpn.traineddata.gz",
+      eng: "https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz",
+      vie: "https://cdn.jsdelivr.net/npm/@tesseract.js-data/vie/4.0.0_best_int/vie.traineddata.gz",
+    },
+  };
+
+  function supportsWasmSimd() {
+    try {
+      return (
+        typeof WebAssembly === "object" &&
+        WebAssembly.validate(
+          new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11])
+        )
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function sanitizeAndValidateOcrText(rawText, subjectCode = "EXAM") {
+    if (!rawText) return "";
+    let cleaned = String(rawText)
+      .replace(/\[Note:\s*the\s*'helloworld'\s*demo\s*key[^\]]*\]/gi, " ")
+      .replace(/There are \d+ questions[^.\r\n]*\.?/gi, " ")
+      .replace(/^\s*(?:Answer|Back\s*Next|Back|Next|FUO(?:\s*Overflow)?|fuoverflow\.com)\s*$/gim, " ")
+      .replace(/^\s*\d{1,2}:\d{2}\s*$/gm, " ")
+      .replace(/\r\n/g, "\n")
+      .trim();
+
+    if (!cleaned) return "";
+
+    const meaningful = cleaned.replace(/[^\p{L}\p{N}]/gu, "");
+    if (meaningful.length < 6) return "";
+
+    if (/JPD|JPN|JAP/i.test(subjectCode)) {
+      const hasThaiOrCyrillic = /[\u0E00-\u0E7F\u0400-\u04FF]/.test(cleaned);
+      const hasJapanese = /[\u3040-\u30ff\u4e00-\u9faf]/.test(cleaned);
+      if (hasThaiOrCyrillic && !hasJapanese) return "";
+    }
+
+    return cleaned;
+  }
+
+  function normalizeOptionMarkers(text) {
+    let normalized = String(text || "")
+      .replace(/[Ａ]/g, "A")
+      .replace(/[Ｂ]/g, "B")
+      .replace(/[Ｃ]/g, "C")
+      .replace(/[Ｄ]/g, "D")
+      .replace(/．/g, ".")
+      .replace(/[（(]\s*([A-D])\s*[）)]/gi, (_, l) => `${l.toUpperCase()}. `);
+
+    // Split inline options like "A. foo B. bar" or Japanese "A.なん B.だれ" onto separate lines (exclude ":" so A:/B: dialogues stay intact)
+    normalized = normalized.replace(/([^\n])\s+([A-D])([.)])\s*(?=\S)/g, "$1\n$2$3 ");
+    return normalized;
+  }
+
   /**
-   * Super-resolve and sharpen image base64 on Canvas (2.5x upscale) before OCR.
+   * Parses raw OCR text into a structured Question object with 4 clean options.
    */
-  async function upscaleImageForOcr(dataUrl) {
+  function parseOcrTextToQuestion(rawText, qNum, defaultStem = "", communityAns = null, meta = {}) {
+    const cleanDefaultStem = String(defaultStem || "").trim();
+    const resolution = meta.width && meta.height ? `${meta.width}x${meta.height}` : undefined;
+    const isLowResLocked = Boolean(meta.isLowResLocked);
+
+    const validatedText = sanitizeAndValidateOcrText(rawText, meta.subjectCode || "EXAM");
+    if (!validatedText) {
+      const status = isLowResLocked
+        ? "locked_thumbnail_low_res"
+        : meta.rateLimited
+          ? "rate_limited"
+          : "no_text_detected";
+      return {
+        questionNumber: qNum,
+        question: cleanDefaultStem || `Question ${qNum}`,
+        options: ["A. Option A", "B. Option B", "C. Option C", "D. Option D"],
+        correctAnswer: 0,
+        explanation: isLowResLocked
+          ? "Locked 304x160 member preview thumbnail (Schema.org stem preserved)"
+          : "No text detected by OCR",
+        communityAnswer: communityAns || null,
+        resolution,
+        ocrStatus: status,
+      };
+    }
+
+    const normalized = normalizeOptionMarkers(validatedText);
+    const lines = normalized.split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean);
+    // Prefer strict dot/paren option prefixes (A. / A)) so Japanese dialogue lines ("A: ... B: ...") stay in question text
+    const strictOptionRegex = /^([A-D])[.)]\s*(.+)$/i;
+    const looseOptionRegex = /^([A-D])[.:)\s-]\s*(.+)$/i;
+    const hasStrictOptions = lines.some((l) => strictOptionRegex.test(l));
+    const optionRegex = hasStrictOptions ? strictOptionRegex : looseOptionRegex;
+
+    const options = [];
+    const questionLines = [];
+    let foundFirstOption = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const match = line.match(optionRegex);
+      const isQuestionPrefix = /^(?:câu|question|q)?\s*\d+\s*[:.)-]\s*(.*)$/i.exec(line);
+      const looksLikeDialogueTurn = !hasStrictOptions && /^[A-B]:/i.test(line) && /\b[A-B]:/i.test(line.slice(2));
+
+      if (match && !looksLikeDialogueTurn && (!isQuestionPrefix || foundFirstOption || /^[A-D]\s*[.)]/i.test(line))) {
+        foundFirstOption = true;
+        const letter = match[1].toUpperCase();
+        options.push(`${letter}. ${match[2].trim()}`);
+      } else if (!foundFirstOption) {
+        if (isQuestionPrefix && isQuestionPrefix[1]) {
+          questionLines.push(isQuestionPrefix[1].trim());
+        } else {
+          questionLines.push(line);
+        }
+      } else if (options.length > 0) {
+        options[options.length - 1] += ` ${line}`;
+      }
+    }
+
+    let questionText = questionLines.join(" ").trim();
+    const stemWithoutEllipsis = cleanDefaultStem.replace(/…+$/, "").trim();
+    if (!questionText) {
+      questionText = cleanDefaultStem || `Question ${qNum}`;
+    } else if (cleanDefaultStem && questionText.length < 18 && stemWithoutEllipsis.length > questionText.length) {
+      questionText = cleanDefaultStem;
+    }
+
+    const cleanOptions = [];
+    const letters = ["A", "B", "C", "D"];
+    for (let i = 0; i < 4; i++) {
+      if (i < options.length) {
+        cleanOptions.push(options[i]);
+      } else {
+        cleanOptions.push(`${letters[i]}. Option ${letters[i]}`);
+      }
+    }
+
+    let correctIndex = 0;
+    if (communityAns) {
+      const char = String(communityAns).trim().toUpperCase().charAt(0);
+      const idx = letters.indexOf(char);
+      if (idx !== -1) correctIndex = idx;
+    }
+
+    const hasRealOptions = options.length >= 2;
+    const ocrStatus = hasRealOptions
+      ? "ok"
+      : isLowResLocked
+        ? "locked_thumbnail_low_res"
+        : "partial_stem_only";
+
+    return {
+      questionNumber: qNum,
+      question: questionText,
+      options: cleanOptions,
+      correctAnswer: correctIndex,
+      explanation: communityAns
+        ? `Community Consensus Answer: ${communityAns}`
+        : hasRealOptions
+          ? `Extracted via ${meta.engineName || "Free OCR"}`
+          : isLowResLocked
+            ? "Partial OCR on locked 304x160 preview thumbnail; Schema.org stem preserved"
+            : `Partial OCR via ${meta.engineName || "Free OCR"} (options missing)`,
+      communityAnswer: communityAns || null,
+      resolution,
+      ocrStatus,
+    };
+  }
+
+  /**
+   * Preprocess image for OCR: trims trailing dead whitespace & corner FUO watermarks,
+   * upscales low-res thumbnails cleanly, stretches contrast, and outputs lossless PNG.
+   */
+  async function preprocessImageForFreeOcr(dataUrl, { binarizeForTesseract = false } = {}) {
     if (!dataUrl || !dataUrl.startsWith("data:image/")) return dataUrl;
     return new Promise((resolve) => {
       try {
         const img = new Image();
         img.onload = () => {
-          if (img.width >= 700) {
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          if (!w || !h) {
             resolve(dataUrl);
             return;
           }
-          const scale = Math.max(2.0, Math.min(3.5, 900 / img.width));
-          const canvas = document.createElement("canvas");
-          canvas.width = Math.round(img.width * scale);
-          canvas.height = Math.round(img.height * scale);
-          const ctx = canvas.getContext("2d");
-          if (!ctx) {
+
+          // Draw raw source to analyze whitespace & corner watermarks
+          const srcCanvas = document.createElement("canvas");
+          srcCanvas.width = w;
+          srcCanvas.height = h;
+          const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
+          if (!srcCtx) {
             resolve(dataUrl);
             return;
           }
-          ctx.fillStyle = "#ffffff";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.imageSmoothingEnabled = true;
-          ctx.imageSmoothingQuality = "high";
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          const upscaled = canvas.toDataURL("image/jpeg", 0.95);
-          resolve(upscaled);
+          srcCtx.fillStyle = "#ffffff";
+          srcCtx.fillRect(0, 0, w, h);
+          srcCtx.drawImage(img, 0, 0, w, h);
+
+          let cropH = h;
+          try {
+            const imgData = srcCtx.getImageData(0, 0, w, h);
+            const px = imgData.data;
+
+            // 1. Detect trailing empty white canyon while skipping bottom 15% watermark zone
+            if (h >= 120 && w >= 200) {
+              let lastContentY = 0;
+              const scanLimit = Math.floor(h * 0.85);
+              for (let y = 0; y < scanLimit; y++) {
+                let darkCount = 0;
+                for (let x = Math.floor(w * 0.05); x < Math.floor(w * 0.95); x += 2) {
+                  const idx = (y * w + x) * 4;
+                  if (px[idx] < 220 || px[idx + 1] < 220 || px[idx + 2] < 220) {
+                    darkCount++;
+                    if (darkCount > 3) break;
+                  }
+                }
+                if (darkCount > 3) lastContentY = y;
+              }
+              if (lastContentY > Math.round(h * 0.18) && lastContentY < Math.round(h * 0.65)) {
+                cropH = Math.min(h, lastContentY + Math.max(12, Math.round(h * 0.08)));
+              }
+            }
+
+            // 2. If full height kept, mask dark corner FUO/timer badges only if center is white
+            if (cropH === h && w >= 200 && h >= 120) {
+              const sampleAvgLum = (x0, y0, x1, y1) => {
+                let sum = 0;
+                let cnt = 0;
+                for (let y = y0; y < y1; y += 2) {
+                  for (let x = x0; x < x1; x += 2) {
+                    const idx = (y * w + x) * 4;
+                    sum += 0.299 * px[idx] + 0.587 * px[idx + 1] + 0.114 * px[idx + 2];
+                    cnt++;
+                  }
+                }
+                return cnt > 0 ? sum / cnt : 255;
+              };
+              const centerLum = sampleAvgLum(
+                Math.floor(w * 0.25),
+                Math.floor(h * 0.25),
+                Math.floor(w * 0.75),
+                Math.floor(h * 0.65)
+              );
+              if (centerLum > 225) {
+                const blLum = sampleAvgLum(0, Math.floor(h * 0.86), Math.floor(w * 0.12), h);
+                if (blLum < 165) {
+                  srcCtx.fillStyle = "#ffffff";
+                  srcCtx.fillRect(0, Math.floor(h * 0.85), Math.ceil(w * 0.14), Math.ceil(h * 0.15));
+                }
+                const brLum = sampleAvgLum(Math.floor(w * 0.9), Math.floor(h * 0.88), w, h);
+                if (brLum < 165) {
+                  srcCtx.fillStyle = "#ffffff";
+                  srcCtx.fillRect(Math.floor(w * 0.88), Math.floor(h * 0.87), Math.ceil(w * 0.12), Math.ceil(h * 0.13));
+                }
+              }
+            }
+          } catch {
+            // ignore pixel scan issues
+          }
+
+          const scale = w < 1400 ? Math.max(1.0, Math.min(4.5, 1400 / w)) : 1.0;
+          const outW = Math.round(w * scale);
+          const outH = Math.round(cropH * scale);
+
+          const outCanvas = document.createElement("canvas");
+          outCanvas.width = outW;
+          outCanvas.height = outH;
+          const outCtx = outCanvas.getContext("2d", { willReadFrequently: true });
+          if (!outCtx) {
+            resolve(dataUrl);
+            return;
+          }
+          outCtx.fillStyle = "#ffffff";
+          outCtx.fillRect(0, 0, outW, outH);
+          outCtx.imageSmoothingEnabled = true;
+          outCtx.imageSmoothingQuality = "high";
+          outCtx.drawImage(srcCanvas, 0, 0, w, cropH, 0, 0, outW, outH);
+
+          if (binarizeForTesseract) {
+            try {
+              const outImg = outCtx.getImageData(0, 0, outW, outH);
+              const d = outImg.data;
+              for (let i = 0; i < d.length; i += 4) {
+                const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+                // Soft contrast stretch: crisp black strokes, clean white background
+                const stretched = lum >= 215 ? 255 : lum <= 115 ? 0 : Math.round(((lum - 115) / 100) * 255);
+                d[i] = stretched;
+                d[i + 1] = stretched;
+                d[i + 2] = stretched;
+              }
+              outCtx.putImageData(outImg, 0, 0);
+            } catch {
+              // keep grayscale/upscaled result
+            }
+          }
+
+          resolve(outCanvas.toDataURL("image/png"));
         };
         img.onerror = () => resolve(dataUrl);
         img.src = dataUrl;
@@ -371,6 +689,262 @@
         resolve(dataUrl);
       }
     });
+  }
+
+  /**
+   * Builds a CSP-safe persistent Tesseract.js v5 worker by fetching core/worker/traineddata
+   * via GM_xmlhttpRequest and bundling core + worker into a single same-origin Blob Worker.
+   */
+  async function createPersistentTesseractWorker(subjectCode = "EXAM") {
+    if (typeof Tesseract === "undefined" || !Tesseract.createWorker) {
+      throw new Error("Tesseract.js library not loaded");
+    }
+
+    let langCodes = ["eng"];
+    if (/JPD|JPN|JAP/i.test(subjectCode)) langCodes = ["jpn", "eng"];
+    else if (/VIE|VNM/i.test(subjectCode)) langCodes = ["vie", "eng"];
+    const langString = langCodes.join("+");
+
+    const coreUrl = supportsWasmSimd() ? TESS_CDN.coreSimd : TESS_CDN.coreFallback;
+    const blobUrlsToRevoke = [];
+
+    const [coreJs, workerJs, ...langBuffers] = await Promise.all([
+      gmFetchAnonymous(coreUrl, "text", 45000),
+      gmFetchAnonymous(TESS_CDN.worker, "text", 30000),
+      ...langCodes.map((code) => gmFetchAnonymous(TESS_CDN.langs[code], "arraybuffer", 60000)),
+    ]);
+
+    const langBlobMap = {};
+    langCodes.forEach((code, i) => {
+      const blob = new Blob([langBuffers[i]], { type: "application/gzip" });
+      const bUrl = URL.createObjectURL(blob);
+      blobUrlsToRevoke.push(bUrl);
+      langBlobMap[`${code}.traineddata.gz`] = bUrl;
+    });
+
+    const workerHeader = `
+      (function() {
+        var __origFetch = self.fetch.bind(self);
+        var __langBlobMap = ${JSON.stringify(langBlobMap)};
+        self.fetch = function(input, init) {
+          var u = typeof input === "string" ? input : (input && input.url) || "";
+          for (var suffix in __langBlobMap) {
+            if (Object.prototype.hasOwnProperty.call(__langBlobMap, suffix) && u.indexOf(suffix) !== -1) {
+              return __origFetch(__langBlobMap[suffix]);
+            }
+          }
+          return __origFetch(input, init);
+        };
+      })();
+    `;
+
+    const combinedWorkerBlob = new Blob(
+      [
+        workerHeader,
+        "\n;\n",
+        coreJs,
+        '\n;if (typeof TesseractCore !== "undefined") { self.TesseractCore = TesseractCore; }\n',
+        workerJs,
+      ],
+      { type: "application/javascript" }
+    );
+    const workerBlobUrl = URL.createObjectURL(combinedWorkerBlob);
+    blobUrlsToRevoke.push(workerBlobUrl);
+
+    let worker = null;
+    try {
+      const initPromise = Tesseract.createWorker(langString, 1, {
+        workerBlobURL: false,
+        workerPath: workerBlobUrl,
+        errorHandler: (err) => console.warn("[FUO Tesseract Worker Notice]", err),
+      });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Tesseract worker initialization timeout (45s)")), 45000)
+      );
+      worker = await Promise.race([initPromise, timeoutPromise]);
+    } catch (err) {
+      blobUrlsToRevoke.forEach((u) => {
+        try {
+          URL.revokeObjectURL(u);
+        } catch {}
+      });
+      throw err;
+    }
+
+    return {
+      worker,
+      cleanup: async () => {
+        try {
+          if (worker) await worker.terminate();
+        } catch {}
+        blobUrlsToRevoke.forEach((u) => {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {}
+        });
+      },
+    };
+  }
+
+  /**
+   * Free OCR.space fallback (supports optional user free key via GM_getValue,
+   * fixes MIME spoofing, strips demo banners, and enforces a 429 circuit breaker).
+   */
+  async function ocrSpaceFree(dataUrl, subjectCode = "EXAM", ocrState = {}) {
+    if (ocrState.rateLimited) {
+      return { ok: false, rateLimited: true, text: "" };
+    }
+
+    const customKey = typeof GM_getValue === "function" ? GM_getValue("OCR_SPACE_API_KEY", "").trim() : "";
+    const apiKey = customKey || "helloworld";
+    const isJapanese = /JPD|JPN|JAP/i.test(subjectCode);
+
+    const mimeMatch = String(dataUrl || "").match(/^data:(image\/[a-z0-9+.-]+);base64,/i);
+    const actualMime = mimeMatch ? mimeMatch[1].toLowerCase() : "image/png";
+    const filetype = actualMime.includes("png")
+      ? "PNG"
+      : actualMime.includes("webp")
+        ? "WEBP"
+        : "JPG";
+
+    return new Promise((resolve) => {
+      const formData = new FormData();
+      formData.append("base64Image", dataUrl);
+      formData.append("language", isJapanese ? "auto" : "eng");
+      formData.append("OCREngine", "2");
+      formData.append("scale", "true");
+      formData.append("isOverlayRequired", "false");
+      formData.append("filetype", filetype);
+
+      GM_xmlhttpRequest({
+        method: "POST",
+        url: "https://api.ocr.space/parse/image",
+        headers: { apikey: apiKey },
+        data: formData,
+        timeout: 30000,
+        onload: (res) => {
+          if (res.status === 429) {
+            ocrState.rateLimited = true;
+            resolve({ ok: false, rateLimited: true, text: "" });
+            return;
+          }
+          try {
+            const json = JSON.parse(res.responseText);
+            const rawErr = String(json?.error || json?.ErrorMessage || "");
+            if (/E581|rate limit/i.test(rawErr)) {
+              ocrState.rateLimited = true;
+              resolve({ ok: false, rateLimited: true, text: "" });
+              return;
+            }
+            if (json?.IsErroredOnProcessing || (typeof json?.OCRExitCode === "number" && json.OCRExitCode > 2)) {
+              resolve({ ok: false, rateLimited: false, text: "" });
+              return;
+            }
+            const parsedText = String(json?.ParsedResults?.[0]?.ParsedText || "")
+              .replace(/\[Note:\s*the\s*'helloworld'\s*demo\s*key[^\]]*\]/gi, " ")
+              .trim();
+            resolve({ ok: Boolean(parsedText), rateLimited: false, text: parsedText });
+          } catch {
+            resolve({ ok: false, rateLimited: false, text: "" });
+          }
+        },
+        onerror: () => resolve({ ok: false, rateLimited: false, text: "" }),
+        ontimeout: () => resolve({ ok: false, rateLimited: false, text: "" }),
+      });
+    });
+  }
+
+  /**
+   * Batch Free OCR orchestrator:
+   * 1) Preprocesses each image (whitespace/watermark clean + upscale + PNG),
+   * 2) Runs 1 persistent CSP-safe Tesseract.js worker across all questions,
+   * 3) Falls back to OCR.space (with 429 circuit breaker) only if Tesseract yielded empty/noise.
+   */
+  async function runFreeOcrBatch(capturedQuestions, subjectCode = "EXAM", activeBtn = null) {
+    let workerHandle = null;
+    const ocrState = { rateLimited: false };
+
+    if (activeBtn) activeBtn.textContent = "⏳ LOADING OCR ENGINE...";
+    try {
+      workerHandle = await createPersistentTesseractWorker(subjectCode);
+    } catch (err) {
+      console.warn("CSP-safe Tesseract init failed; falling back to OCR.space:", err);
+    }
+
+    const solvedList = [];
+    try {
+      for (let idx = 0; idx < capturedQuestions.length; idx++) {
+        const item = capturedQuestions[idx];
+        if (activeBtn) {
+          activeBtn.textContent = `🆓 OCR (${idx + 1}/${capturedQuestions.length})...`;
+        }
+
+        const preprocessedPng = await preprocessImageForFreeOcr(item.dataUrl, {
+          binarizeForTesseract: true,
+        });
+
+        let rawText = "";
+        let engineName = "Tesseract.js (In-Browser)";
+
+        if (workerHandle && workerHandle.worker) {
+          try {
+            const ret = await workerHandle.worker.recognize(preprocessedPng);
+            rawText = sanitizeAndValidateOcrText(ret?.data?.text || "", subjectCode);
+          } catch (err) {
+            console.warn(`Tesseract recognize error Q${item.questionNumber}:`, err);
+          }
+        }
+
+        if (!rawText && !ocrState.rateLimited) {
+          const ocrSpacePng = await preprocessImageForFreeOcr(item.dataUrl, {
+            binarizeForTesseract: false,
+          });
+          const ocrRes = await ocrSpaceFree(ocrSpacePng, subjectCode, ocrState);
+          if (ocrRes.ok && ocrRes.text) {
+            rawText = sanitizeAndValidateOcrText(ocrRes.text, subjectCode);
+            if (rawText) engineName = "OCR.space (Engine 2)";
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+
+        const parsed = parseOcrTextToQuestion(
+          rawText,
+          item.questionNumber,
+          item.questionStem || "",
+          item.communityAnswer || null,
+          {
+            subjectCode,
+            width: item.imageWidth || 0,
+            height: item.imageHeight || 0,
+            isLowResLocked: Boolean(item.isLowResLocked),
+            rateLimited: ocrState.rateLimited && !rawText,
+            engineName,
+          }
+        );
+
+        solvedList.push({
+          ...parsed,
+          filename: item.filename,
+        });
+
+        if (idx < capturedQuestions.length - 1) {
+          await new Promise((r) => setTimeout(r, 60));
+        }
+      }
+    } finally {
+      if (workerHandle) {
+        await workerHandle.cleanup();
+      }
+    }
+
+    return solvedList;
+  }
+
+  /**
+   * Super-resolve and sharpen image base64 on Canvas before AI Vision OCR.
+   */
+  async function upscaleImageForOcr(dataUrl) {
+    return preprocessImageForFreeOcr(dataUrl, { binarizeForTesseract: false });
   }
 
   /**
@@ -685,29 +1259,51 @@ Return STRICT JSON format with this exact structure:
   }
 
   const btnHtml = createBrutalistButton("⚡ EXPORT HTML", "#2563eb");
-  const btnJson = createBrutalistButton("📦 EXPORT JSON", "#10b981");
-  const btnKey = createBrutalistButton("🔑 AI KEY", "#64748b");
+  const btnFreeJson = createBrutalistButton("🆓 FREE OCR JSON", "#10b981");
+  const btnAiJson = createBrutalistButton("📦 AI JSON", "#8b5cf6");
+  const btnKey = createBrutalistButton("🔑 API KEYS", "#64748b");
 
   container.appendChild(btnHtml);
-  container.appendChild(btnJson);
+  container.appendChild(btnFreeJson);
+  container.appendChild(btnAiJson);
   container.appendChild(btnKey);
 
+  btnHtml.addEventListener("click", () => startExport("html"));
+  btnFreeJson.addEventListener("click", () => startExport("free_json"));
+  btnAiJson.addEventListener("click", () => startExport("ai_json"));
+
   btnKey.addEventListener("click", () => {
-    const current = typeof GM_getValue === "function" ? GM_getValue("GEMINI_API_KEY", "") : "";
-    const updated = prompt(
-      "Enter your Google Gemini API Key to enable automatic question & options transcription:\n(Free key at: https://aistudio.google.com/apikey)",
-      current
+    const currentAi = typeof GM_getValue === "function" ? GM_getValue("GEMINI_API_KEY", "") : "";
+    const updatedAi = prompt(
+      "Enter Google Gemini or OpenRouter API Key (for [AI JSON], optional):\n(Free key at: https://aistudio.google.com/apikey)",
+      currentAi
     );
-    if (updated !== null && typeof GM_setValue === "function") {
-      GM_setValue("GEMINI_API_KEY", updated.trim());
-      alert(updated.trim() ? "Gemini API Key saved!" : "Gemini API Key removed.");
+    if (updatedAi !== null && typeof GM_setValue === "function") {
+      GM_setValue("GEMINI_API_KEY", updatedAi.trim());
+    }
+
+    const currentOcrSpace = typeof GM_getValue === "function" ? GM_getValue("OCR_SPACE_API_KEY", "") : "";
+    const updatedOcrSpace = prompt(
+      "Optional: Enter personal FREE OCR.space API Key (25,000 req/month, avoids shared demo key limits):\n(Get free key at: https://ocr.space/ocrapi/freekey — leave empty to use local Tesseract.js)",
+      currentOcrSpace
+    );
+    if (updatedOcrSpace !== null && typeof GM_setValue === "function") {
+      GM_setValue("OCR_SPACE_API_KEY", updatedOcrSpace.trim());
+    }
+
+    if (updatedAi !== null || updatedOcrSpace !== null) {
+      alert("API key settings updated!");
     }
   });
 
   async function startExport(format = "html") {
-    const activeBtn = format === "json" ? btnJson : btnHtml;
+    let activeBtn = btnHtml;
+    if (format === "free_json") activeBtn = btnFreeJson;
+    else if (format === "ai_json" || format === "json") activeBtn = btnAiJson;
+
     btnHtml.disabled = true;
-    btnJson.disabled = true;
+    btnFreeJson.disabled = true;
+    btnAiJson.disabled = true;
     btnKey.disabled = true;
     activeBtn.textContent = "⏳ SCANNING THREAD...";
 
@@ -755,16 +1351,29 @@ Return STRICT JSON format with this exact structure:
         return resolveUrl(mediaHref);
       }
 
-      function addCandidate(fullUrl, mediaUrl, thumbUrl, imgEl, rawFilename) {
+      function addCandidate(fullUrl, mediaUrl, thumbUrl, imgEl, rawFilename, anchorEl = null, isLockedCard = false) {
         const key = mediaUrl || fullUrl || thumbUrl;
         if (!key || seenKeys.has(key)) return;
         if (DECORATIVE_REGEX.test(key)) return;
         seenKeys.add(key);
-        candidates.push({ fullUrl, mediaUrl, thumbUrl, imgEl, rawFilename });
+        candidates.push({ fullUrl, mediaUrl, thumbUrl, imgEl, rawFilename, anchorEl, isLockedCard });
+      }
+
+      // Expand hidden gallery items (>= 24) if FuOverflow "Xem thêm" button is collapsed
+      const expandBtn = document.querySelector(
+        "ul[aria-label*='Ảnh đính kèm' i] ~ button[aria-expanded='false'], button[aria-expanded='false'][aria-label*='ảnh' i]"
+      );
+      if (expandBtn) {
+        try {
+          expandBtn.click();
+          await new Promise((r) => setTimeout(r, 120));
+        } catch {}
       }
 
       // Priority 1: Next.js Attachment Grid (FU Overflow modern layout)
-      document.querySelectorAll("ul[aria-label*='Ảnh đính kèm' i] li, a[href*='/media/']").forEach((container, idx) => {
+      const gridLis = document.querySelectorAll("ul[aria-label*='Ảnh đính kèm' i] li");
+      const priority1Nodes = gridLis.length > 0 ? gridLis : document.querySelectorAll("a[href*='/media/']");
+      priority1Nodes.forEach((container, idx) => {
         const a = container.tagName === "A" ? container : container.querySelector("a[href*='/media/']");
         const img = container.querySelector("img");
         if (!img) return;
@@ -775,6 +1384,9 @@ Return STRICT JSON format with this exact structure:
         const mediaUrl = a ? resolveUrl(a.getAttribute("href") || a.href || "") : "";
         const ariaLabel = (a && a.getAttribute("aria-label")) || "";
         const alt = img.getAttribute("alt") || "";
+        const isLockedCard =
+          /dành cho thành viên/i.test(ariaLabel) ||
+          Boolean(a && a.querySelector("svg.lucide-lock"));
 
         let rawFilename = "";
         const mFile = ariaLabel.match(/:\s*([^\s—–-]+(?:\.webp|\.png|\.jpe?g))/i);
@@ -786,7 +1398,7 @@ Return STRICT JSON format with this exact structure:
           else rawFilename = `Q${idx + 1}.webp`;
         }
 
-        addCandidate("", mediaUrl, thumbUrl, img, rawFilename);
+        addCandidate("", mediaUrl, thumbUrl, img, rawFilename, a, isLockedCard);
       });
 
       // Priority 2: XenForo Attachment Cards (<li class="file">)
@@ -806,7 +1418,7 @@ Return STRICT JSON format with this exact structure:
             (img && img.getAttribute("alt")) ||
             `Q${idx + 1}.jpg`;
 
-          addCandidate(fullUrl, mediaUrl, thumbUrl, img, rawFilename);
+          addCandidate(fullUrl, mediaUrl, thumbUrl, img, rawFilename, a);
         });
       }
 
@@ -821,7 +1433,7 @@ Return STRICT JSON format with this exact structure:
             : "";
           const rawFilename = (img && (img.getAttribute("alt") || img.getAttribute("title"))) || `Q${idx + 1}.jpg`;
 
-          addCandidate(fullUrl, mediaUrl, thumbUrl, img, rawFilename);
+          addCandidate(fullUrl, mediaUrl, thumbUrl, img, rawFilename, a);
         });
       }
 
@@ -851,9 +1463,112 @@ Return STRICT JSON format with this exact structure:
 
       if (candidates.length === 0) {
         alert("No question images found on this thread.");
-        button.textContent = "⚡ EXPORT TO QNA GENERATOR";
-        button.disabled = false;
+        btnHtml.textContent = "⚡ EXPORT HTML";
+        btnFreeJson.textContent = "🆓 FREE OCR JSON";
+        btnAiJson.textContent = "📦 AI JSON";
+        btnHtml.disabled = false;
+        btnFreeJson.disabled = false;
+        btnAiJson.disabled = false;
+        btnKey.disabled = false;
         return;
+      }
+
+      async function captureViaLightboxModal(item) {
+        const trigger = item.anchorEl || item.imgEl;
+        if (!trigger) return { ok: false, locked: false, dataUrl: null };
+
+        let locked = false;
+        let resultDataUrl = null;
+        let note = "";
+
+        try {
+          if (typeof trigger.scrollIntoView === "function" && !trigger.closest("li[hidden]")) {
+            trigger.scrollIntoView({ behavior: "instant", block: "center" });
+          }
+          trigger.click();
+
+          const deadline = Date.now() + 4500;
+          const openStart = Date.now();
+          while (Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 100));
+            const dialog = document.querySelector(
+              "[role='dialog'], .xfmgMedia-view, .media-viewer, .pswp--open, .fancybox__container, .modal"
+            );
+            if (!dialog) continue;
+
+            const lockNote = dialog.querySelector("[role='note'][aria-label*='thành viên' i], [role='alert']");
+            if (lockNote) {
+              locked = true;
+              break;
+            }
+
+            const dlAnchor = dialog.querySelector("a[aria-label='Tải ảnh gốc'][href^='blob:']");
+            const lbImg =
+              dialog.querySelector("img[data-lightbox-img]") ||
+              Array.from(dialog.querySelectorAll("img")).find(
+                (el) => !DECORATIVE_REGEX.test(el.src || "") && el.naturalWidth >= 400
+              );
+
+            const blobSrc =
+              (dlAnchor && dlAnchor.getAttribute("href")) ||
+              (lbImg && (lbImg.currentSrc || lbImg.src || "").startsWith("blob:") && lbImg.complete && lbImg.naturalWidth > 400
+                ? lbImg.currentSrc || lbImg.src
+                : "");
+
+            if (blobSrc && blobSrc.startsWith("blob:")) {
+              try {
+                const res = await fetch(blobSrc);
+                const blob = await res.blob();
+                const dUrl = await blobToDataUrl(blob);
+                if (dUrl.startsWith("data:image/")) {
+                  resultDataUrl = dUrl;
+                  note = "Lightbox Decrypted Full-HD";
+                  break;
+                }
+              } catch {
+                // fall back to canvas capture below
+              }
+            }
+
+            const elapsed = Date.now() - openStart;
+            if (
+              lbImg &&
+              !/\/exam-xs\//i.test(lbImg.currentSrc || lbImg.src || "") &&
+              lbImg.complete &&
+              lbImg.naturalWidth >= 600 &&
+              elapsed >= 700
+            ) {
+              const canvasRes = await captureViaCanvas(lbImg);
+              if (canvasRes.ok) {
+                resultDataUrl = canvasRes.dataUrl;
+                note = "Clicked Modal High-Res";
+                break;
+              }
+            }
+          }
+        } catch {
+          // ignore modal click error
+        } finally {
+          try {
+            const closeBtn = document.querySelector(
+              "[role='dialog'] button[aria-label='Đóng xem ảnh'], [aria-label*='close' i], [data-action='close'], .modal-close, button.close, .pswp__button--close"
+            );
+            if (closeBtn) {
+              closeBtn.click();
+            } else {
+              document.dispatchEvent(
+                new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true })
+              );
+            }
+            const closeDeadline = Date.now() + 1200;
+            while (Date.now() < closeDeadline) {
+              if (!document.querySelector("[role='dialog'], .pswp--open, .fancybox__container")) break;
+              await new Promise((r) => setTimeout(r, 80));
+            }
+          } catch {}
+        }
+
+        return { ok: Boolean(resultDataUrl), locked, dataUrl: resultDataUrl, note };
       }
 
       // 3. Multi-Strategy Image & Community Answer Fetching
@@ -861,6 +1576,7 @@ Return STRICT JSON format with this exact structure:
       const capturedQuestions = [];
       const diagnosticErrors = [];
       let successCount = 0;
+      let confirmedLockedModal = false;
 
       for (let i = 0; i < candidates.length; i++) {
         const item = candidates[i];
@@ -869,10 +1585,25 @@ Return STRICT JSON format with this exact structure:
 
         let dataUrl = null;
         let successNote = "";
+        let commInfo = null;
+        let modalLockedDetected = false;
         const stepErrors = [];
 
-        // Tier 1: Direct Full-HD Attachment URL with session cookies
-        if (item.fullUrl) {
+        // Tier 0: Async lightbox modal capture (skips clicking locked cards after lock confirmed)
+        if (!dataUrl && (item.anchorEl || item.imgEl) && !(confirmedLockedModal && item.isLockedCard)) {
+          const modalRes = await captureViaLightboxModal(item);
+          if (modalRes.ok && modalRes.dataUrl) {
+            dataUrl = modalRes.dataUrl;
+            successNote = modalRes.note || "Clicked Modal High-Res";
+          } else if (modalRes.locked) {
+            modalLockedDetected = true;
+            if (item.isLockedCard) confirmedLockedModal = true;
+            stepErrors.push("modal(locked member preview)");
+          }
+        }
+
+        // Tier 1: Direct Full-HD Attachment URL with session cookies (never overwrite Tier 0)
+        if (!dataUrl && item.fullUrl) {
           const fullRes = await fetchValidImageDataUrl(item.fullUrl);
           if (fullRes.ok) {
             dataUrl = fullRes.dataUrl;
@@ -889,7 +1620,9 @@ Return STRICT JSON format with this exact structure:
             const mediaImgRes = await fetchValidImageDataUrl(mediaPage.imageUrl);
             if (mediaImgRes.ok) {
               dataUrl = mediaImgRes.dataUrl;
-              successNote = "Full-HD Media Gallery";
+              successNote = /\/exam-xs\//i.test(mediaPage.imageUrl)
+                ? "Thumbnail (Media Preview)"
+                : "Full-HD Media Gallery";
             } else {
               stepErrors.push(`mediaImg(${mediaImgRes.reason})`);
             }
@@ -922,10 +1655,15 @@ Return STRICT JSON format with this exact structure:
 
         if (dataUrl) {
           successCount++;
+          const dims = await getImageDimensions(dataUrl);
+          const isLowResLocked =
+            modalLockedDetected ||
+            Boolean(item.isLockedCard) ||
+            (dims.width > 0 && dims.width <= 400 && dims.height > 0 && dims.height <= 220);
 
           // Extract Community Answer if mediaUrl is available
           let commAnsHtml = "";
-          let commInfo = null;
+          commInfo = null;
           if (item.mediaUrl) {
             try {
               commInfo = await scrapeCommunityAnswerForMedia(item.mediaUrl);
@@ -941,12 +1679,13 @@ Return STRICT JSON format with this exact structure:
           }
 
           const safeFilename = escapeHtml(item.rawFilename ? ` (${item.rawFilename})` : "");
+          const dimLabel = dims.width && dims.height ? ` (${dims.width}x${dims.height})` : "";
           questionBlocks.push(`
   <div class="question" style="margin-bottom: 28px; padding: 18px; border: 2px solid #0f172a; background-color: #ffffff;">
     <p style="font-size: 16px; margin-top: 0;"><strong>Question ${qNum}${safeFilename}:</strong> Solve the question shown in the diagram/screenshot below.</p>
     ${commAnsHtml}
     <img src="${dataUrl}" alt="Question ${qNum}" style="max-width: 100%; height: auto; display: block; margin: 14px 0; border: 1px solid #cbd5e1;" />
-    <span style="font-size: 11px; color: #64748b; font-family: monospace;">Source: ${escapeHtml(successNote)}</span>
+    <span style="font-size: 11px; color: #64748b; font-family: monospace;">Source: ${escapeHtml(successNote + dimLabel)}</span>
   </div>`);
 
           capturedQuestions.push({
@@ -956,6 +1695,9 @@ Return STRICT JSON format with this exact structure:
             communityAnswer: commInfo?.topAnswer || null,
             questionStem: commInfo?.questionStem || "",
             dataUrl,
+            imageWidth: dims.width,
+            imageHeight: dims.height,
+            isLowResLocked,
             sourceNote: successNote,
           });
         } else {
@@ -974,9 +1716,11 @@ Return STRICT JSON format with this exact structure:
             `Tip: Make sure you are logged in to FuOverflow and that your Tampermonkey script has '@connect *' granted.`
         );
         btnHtml.textContent = "⚡ EXPORT HTML";
-        btnJson.textContent = "📦 EXPORT JSON";
+        btnFreeJson.textContent = "🆓 FREE OCR JSON";
+        btnAiJson.textContent = "📦 AI JSON";
         btnHtml.disabled = false;
-        btnJson.disabled = false;
+        btnFreeJson.disabled = false;
+        btnAiJson.disabled = false;
         btnKey.disabled = false;
         return;
       }
@@ -984,52 +1728,67 @@ Return STRICT JSON format with this exact structure:
       // 4. Download Export File (HTML or JSON)
       const cleanName = title.replace(/[\\/:*?"<>|]/g, "_").slice(0, 60);
 
-      if (format === "json") {
-        let geminiKey = typeof GM_getValue === "function" ? GM_getValue("GEMINI_API_KEY", "") : "";
-        if (!geminiKey) {
-          const input = prompt(
-            "To transcribe question text & options into the JSON, enter your Google Gemini API Key:\n\n" +
-              "(Free API key available at: https://aistudio.google.com/apikey)\n\n" +
-              "Click Cancel if you want to export raw images JSON without OCR."
-          );
-          if (input && input.trim()) {
-            geminiKey = input.trim();
-            if (typeof GM_setValue === "function") {
-              GM_setValue("GEMINI_API_KEY", geminiKey);
-            }
-          }
-        }
+      if (format === "free_json" || format === "ai_json" || format === "json") {
+        let finalQuestions = [];
 
-        let finalQuestions = capturedQuestions;
-
-        if (geminiKey) {
-          const solvedList = [];
-          for (let idx = 0; idx < capturedQuestions.length; idx++) {
-            const item = capturedQuestions[idx];
-            activeBtn.textContent = `🧠 OCR (${idx + 1}/${capturedQuestions.length})...`;
-            const solved = await transcribeQuestionWithGemini(
-              geminiKey,
-              item.dataUrl,
-              "image/webp",
-              item.questionNumber,
-              item.questionStem || "",
-              item.communityAnswer || null,
-              subjectCode
+        if (format === "free_json") {
+          // 100% Free In-Browser OCR (CSP-safe persistent Tesseract.js with OCR.space fallback)
+          finalQuestions = await runFreeOcrBatch(capturedQuestions, subjectCode, activeBtn);
+        } else {
+          // AI JSON path (Gemini / OpenRouter)
+          let geminiKey = typeof GM_getValue === "function" ? GM_getValue("GEMINI_API_KEY", "") : "";
+          if (!geminiKey) {
+            const wantFree = confirm(
+              "No AI API Key is configured.\n\nClick OK to export using 100% FREE In-Browser OCR (No API key needed)!\n\nClick Cancel to enter a Gemini / OpenRouter API Key."
             );
-            solvedList.push({
-              questionNumber: item.questionNumber,
-              question: solved.question,
-              options: solved.options,
-              correctAnswer: solved.correctAnswer,
-              explanation: solved.explanation,
-              communityAnswer: item.communityAnswer,
-              filename: item.filename,
-            });
-            if (idx < capturedQuestions.length - 1) {
-              await new Promise((r) => setTimeout(r, 400));
+            if (wantFree) {
+              finalQuestions = await runFreeOcrBatch(capturedQuestions, subjectCode, activeBtn);
+            } else {
+              const input = prompt(
+                "Enter your Google Gemini API Key or OpenRouter Key:\n(Free key at: https://aistudio.google.com/apikey)"
+              );
+              if (input && input.trim()) {
+                geminiKey = input.trim();
+                if (typeof GM_setValue === "function") {
+                  GM_setValue("GEMINI_API_KEY", geminiKey);
+                }
+              }
             }
           }
-          finalQuestions = solvedList;
+
+          if (geminiKey && finalQuestions.length === 0) {
+            const solvedList = [];
+            for (let idx = 0; idx < capturedQuestions.length; idx++) {
+              const item = capturedQuestions[idx];
+              activeBtn.textContent = `🧠 AI OCR (${idx + 1}/${capturedQuestions.length})...`;
+              const solved = await transcribeQuestionWithGemini(
+                geminiKey,
+                item.dataUrl,
+                "image/webp",
+                item.questionNumber,
+                item.questionStem || "",
+                item.communityAnswer || null,
+                subjectCode
+              );
+              solvedList.push({
+                questionNumber: item.questionNumber,
+                question: solved.question,
+                options: solved.options,
+                correctAnswer: solved.correctAnswer,
+                explanation: solved.explanation,
+                communityAnswer: item.communityAnswer,
+                filename: item.filename,
+              });
+              if (idx < capturedQuestions.length - 1) {
+                await new Promise((r) => setTimeout(r, 400));
+              }
+            }
+            finalQuestions = solvedList;
+          }
+
+          if (finalQuestions.length === 0) {
+            finalQuestions = capturedQuestions;
+          }
         }
 
         const quizJson = {
@@ -1046,9 +1805,23 @@ Return STRICT JSON format with this exact structure:
         const dlUrl = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = dlUrl;
-        a.download = `${cleanName}_${geminiKey ? "solved_" : ""}questions.json`;
+        const prefix = format === "free_json" ? "free_ocr_" : "solved_";
+        a.download = `${cleanName}_${prefix}questions.json`;
         a.click();
         URL.revokeObjectURL(dlUrl);
+
+        if (format === "free_json") {
+          const lockedLowResCount = finalQuestions.filter((q) => q.ocrStatus === "locked_thumbnail_low_res").length;
+          if (lockedLowResCount > 0) {
+            alert(
+              `Exported ${finalQuestions.length} questions, but ${lockedLowResCount}/${finalQuestions.length} images were locked 304x160 previews ("dành cho thành viên có gói").\n\n` +
+                `At 304x160 resolution, A/B/C/D options are only ~2px tall and unreadable by local OCR, so clean Schema.org question stems were preserved instead of noise.\n\n` +
+                `To extract full options:\n` +
+                `1. Log in with an unlocked FuOverflow package (script will capture 1920x1012 Full-HD automatically), OR\n` +
+                `2. Try [ 📦 AI JSON ] with a Gemini/OpenRouter key.`
+            );
+          }
+        }
       } else {
         const finalHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -1078,25 +1851,28 @@ ${questionBlocks.join("\n")}
       activeBtn.style.backgroundColor = "#059669";
       setTimeout(() => {
         btnHtml.textContent = "⚡ EXPORT HTML";
-        btnJson.textContent = "📦 EXPORT JSON";
+        btnFreeJson.textContent = "🆓 FREE OCR JSON";
+        btnAiJson.textContent = "📦 AI JSON";
         btnHtml.style.backgroundColor = "#0f172a";
-        btnJson.style.backgroundColor = "#0f172a";
+        btnFreeJson.style.backgroundColor = "#0f172a";
+        btnAiJson.style.backgroundColor = "#0f172a";
         btnHtml.disabled = false;
-        btnJson.disabled = false;
+        btnFreeJson.disabled = false;
+        btnAiJson.disabled = false;
         btnKey.disabled = false;
       }, 5000);
     } catch (err) {
       console.error("Export error:", err);
       alert(`Export failed: ${err.message}`);
       btnHtml.textContent = "⚡ EXPORT HTML";
-      btnJson.textContent = "📦 EXPORT JSON";
+      btnFreeJson.textContent = "🆓 FREE OCR JSON";
+      btnAiJson.textContent = "📦 AI JSON";
       btnHtml.disabled = false;
-      btnJson.disabled = false;
+      btnFreeJson.disabled = false;
+      btnAiJson.disabled = false;
       btnKey.disabled = false;
     }
   }
 
-  btnHtml.addEventListener("click", () => startExport("html"));
-  btnJson.addEventListener("click", () => startExport("json"));
   document.body.appendChild(container);
 })();
